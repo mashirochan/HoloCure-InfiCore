@@ -1,2 +1,2 @@
 # HoloCure-InfiCore
-A HoloCure core mod that adds helper functions and standardized modifications like modded differentiation and mod config settings.
+ A HoloCure core mod with helper functions and standardized game modifications like modded differentiation and mod config settings.
