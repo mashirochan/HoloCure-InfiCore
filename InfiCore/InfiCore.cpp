@@ -77,6 +77,17 @@ void GenerateConfig(std::string fileName) {
 using FNScriptData = CScript * (*)(int);
 FNScriptData scriptList = nullptr;
 
+TRoutine assetGetIndexFunc = nullptr;
+
+inline int getAssetIndexFromName(const char* name) {
+	RValue Result;
+	RValue arg{};
+	arg.Kind = VALUE_STRING;
+	arg.String = RefString::Alloc(name, strlen(name));
+	assetGetIndexFunc(&Result, nullptr, nullptr, 1, &arg);
+	return static_cast<int>(Result.Real);
+}
+
 // Function Pointers
 struct ArgSetup {
 	RValue args[10] = {};
@@ -138,6 +149,26 @@ struct ArgSetup {
 		args[2].Kind = VALUE_REAL;
 		isInitialized = true;
 	}
+	ArgSetup(bool confirm, bool enter, bool cancel) {
+		args[0].I64 = confirm;
+		args[0].Kind = VALUE_BOOL;
+		args[1].I64 = enter;
+		args[1].Kind = VALUE_BOOL;
+		args[2].I64 = cancel;
+		args[2].Kind = VALUE_BOOL;
+		isInitialized = true;
+	}
+	ArgSetup(const char* name, double subimg, double x, double y) {
+		args[0].I64 = getAssetIndexFromName(name);
+		args[0].Kind = VALUE_INT64;
+		args[1].Real = subimg;
+		args[1].Kind = VALUE_REAL;
+		args[2].Real = x;
+		args[2].Kind = VALUE_REAL;
+		args[3].Real = y;
+		args[3].Kind = VALUE_REAL;
+		isInitialized = true;
+	}
 	ArgSetup(long long topl_x, long long topl_y, long long botr_x, long long botr_y, bool isOutline) {
 		args[0].I64 = topl_x;
 		args[0].Kind = VALUE_INT64;
@@ -151,7 +182,7 @@ struct ArgSetup {
 		args[4].Kind = VALUE_BOOL;
 		isInitialized = true;
 	}	// (double)320, (double)(48 + 13), "TEST", (double)1, (long long)0, (double)32, (double)4, (double)100, (long long)0, (double)1)
-	ArgSetup(double x, double y, const char* text, double len, long long color0, double angleIncrement, double sep, double w, long long color1, double alpha) {
+	ArgSetup(double x, double y, const char* text, double len, double color0, double angleIncrement, double sep, double w, double color1, double alpha) {
 		args[0].Real = x;
 		args[0].Kind = VALUE_REAL;
 		args[1].Real = y;
@@ -160,16 +191,16 @@ struct ArgSetup {
 		args[2].Kind = VALUE_STRING;
 		args[3].Real = len;
 		args[3].Kind = VALUE_REAL;
-		args[4].I64 = color0;
-		args[4].Kind = VALUE_INT64;
+		args[4].Real = color0;
+		args[4].Kind = VALUE_REAL;
 		args[5].Real = angleIncrement;
 		args[5].Kind = VALUE_REAL;
 		args[6].Real = sep;
 		args[6].Kind = VALUE_REAL;
 		args[7].Real = w;
 		args[7].Kind = VALUE_REAL;
-		args[8].I64 = color1;
-		args[8].Kind = VALUE_INT64;
+		args[8].Real = color1;
+		args[8].Kind = VALUE_REAL;
 		args[9].Real = alpha;
 		args[9].Kind = VALUE_REAL;
 
@@ -177,12 +208,10 @@ struct ArgSetup {
 	}
 };
 
-TRoutine assetGetIndexFunc = nullptr;
-
 TRoutine variableInstanceGetFunc = nullptr;
 ArgSetup args_container;
-
 ArgSetup args_currentOption;
+ArgSetup args_canControl;
 
 TRoutine variableInstanceSetFunc = nullptr;
 
@@ -196,6 +225,9 @@ TRoutine variableGlobalGetFunc = nullptr;
 ArgSetup args_charSelected;
 ArgSetup args_version;
 ArgSetup args_textContainer;
+ArgSetup args_lastTitleOption;
+
+TRoutine variableGlobalSetFunc = nullptr;
 
 TRoutine drawSetAlphaFunc = nullptr;
 ArgSetup args_drawSetAlpha;
@@ -209,8 +241,14 @@ ArgSetup args_drawRectangle;
 TRoutine drawButtonFunc = nullptr;
 
 TRoutine drawTextFunc = nullptr;
+ArgSetup args_drawSettingsSprite;
+
+TRoutine drawSpriteFunc = nullptr;
 
 PFUNC_YYGMLScript drawTextOutlineScript = nullptr;
+PFUNC_YYGMLScript commandPrompsScript = nullptr;
+
+ArgSetup args_commandPromps;
 
 TRoutine audioPlaySoundFunc = nullptr;
 ArgSetup args_audioPlaySound;
@@ -271,15 +309,6 @@ void Hook(void* NewFunc, void* TargetFuncPointer, void** pfnOriginal, const char
 	}
 };
 
-inline int getAssetIndexFromName(const char* name) {
-	RValue Result;
-	RValue arg{};
-	arg.Kind = VALUE_STRING;
-	arg.String = RefString::Alloc(name, strlen(name));
-	assetGetIndexFunc(&Result, nullptr, nullptr, 1, &arg);
-	return static_cast<int>(Result.Real);
-}
-
 void HookScriptFunction(const char* scriptFunctionName, void* detourFunction, void** origScript) {
 	int scriptFunctionIndex = getAssetIndexFromName(scriptFunctionName) - 100000;
 
@@ -299,6 +328,8 @@ YYRValue yyrv_mouseY;
 static bool mouseMoved = false;
 int prev_mouseX = 0;
 int prev_mouseY = 0;
+static bool drawTitleChars = true;
+static bool drawConfigMenu = false;
 
 typedef YYRValue* (*ScriptFunc)(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args);
 
@@ -307,9 +338,18 @@ ScriptFunc origConfirmedTitleScreenScript = nullptr;
 YYRValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args) {
 	YYRValue* res = nullptr;
 	YYRValue yyrv_currentOption;
+	YYRValue yyrv_canControl;
+	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
 	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
-	if (static_cast<int>(yyrv_currentOption) == 3) { // 3 = achievements button index
-		PrintMessage(CLR_BRIGHTPURPLE, "Achievements selected!");
+	if (static_cast<int>(yyrv_currentOption) == 3) { // 3 = mod configs button index
+		if (static_cast<int>(yyrv_canControl) == 1) {
+			args_canControl.args[2].Real = 0;
+			variableInstanceSetFunc(&result, Self, Other, 3, args_canControl.args);
+			args_lastTitleOption.args[1].Real = 3;
+			variableGlobalSetFunc(&result, Self, Other, 2, args_lastTitleOption.args);
+			drawTitleChars = false;
+			drawConfigMenu = true;
+		}
 	} else {
 		YYRValue* res = origConfirmedTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
@@ -391,8 +431,12 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				}
 				
 				if (args_currentOption.isInitialized == false) args_currentOption = ArgSetup(Self->i_id, "currentOption");
-				if (args_configHeaderDraw.isInitialized == false)
-					args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (long long)0, (double)32, (double)4, (double)100, (long long)0, (double)1);
+				if (args_canControl.isInitialized == false) args_canControl = ArgSetup(Self->i_id, "canControl");
+				if (args_lastTitleOption.isInitialized == false) args_lastTitleOption = ArgSetup("lastTitleOption");
+				if (args_drawSettingsSprite.isInitialized == false) args_drawSettingsSprite = ArgSetup("hud_optionsmenu", 0, 320, 48);
+				if (args_commandPromps.isInitialized == false) args_commandPromps = ArgSetup(true, true, true);
+				/*if (args_configHeaderDraw.isInitialized == false)
+					args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);*/
 
 				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
 			};
@@ -425,11 +469,27 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 		} else if (_strcmpi(Code->i_pName, "gml_Object_obj_TitleScreen_Draw_0") == 0) {
 			auto TitleScreen_Draw_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
 				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
+				
+				if (drawConfigMenu == true) {
+					drawSpriteFunc(&result, Self, Other, 4, args_drawSettingsSprite.args);
+					commandPrompsScript(Self, Other, &result, 3, reinterpret_cast<YYRValue**>(&args_commandPromps.args));
+				}
 
-				drawTextOutlineScript(Self, Other, &result, 10, reinterpret_cast<YYRValue**>(&args_configHeaderDraw.args));
+				//drawTextOutlineScript(Self, Other, &result, 10, reinterpret_cast<YYRValue**>(&args_configHeaderDraw.args));
 			};
 			TitleScreen_Draw_0(pCodeEvent, Self, Other, Code, Res, Flags);
 			codeFuncTable[Code->i_CodeIndex] = TitleScreen_Draw_0;
+		} else if (_strcmpi(Code->i_pName, "gml_Object_obj_TitleCharacter_Draw_0") == 0) {
+			auto TitleCharacter_Draw_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
+				if (drawTitleChars == true) {
+					CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
+				} else {
+					pCodeEvent->Cancel(true);
+				}
+
+			};
+			TitleCharacter_Draw_0(pCodeEvent, Self, Other, Code, Res, Flags);
+			codeFuncTable[Code->i_CodeIndex] = TitleCharacter_Draw_0;
 		} else {
 			auto UnmodifiedFunc = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
 				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
@@ -524,11 +584,13 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	GetFunctionByName("variable_instance_get", variableInstanceGetFunc);
 	GetFunctionByName("variable_instance_set", variableInstanceSetFunc);
 	GetFunctionByName("variable_global_get", variableGlobalGetFunc);
+	GetFunctionByName("variable_global_set", variableGlobalSetFunc);
 	GetFunctionByName("draw_set_alpha", drawSetAlphaFunc);
 	GetFunctionByName("draw_set_color", drawSetColorFunc);
 	GetFunctionByName("draw_rectangle", drawRectangleFunc);
 	GetFunctionByName("draw_button", drawButtonFunc);
 	GetFunctionByName("draw_text", drawTextFunc);
+	GetFunctionByName("draw_sprite", drawSpriteFunc);
 	GetFunctionByName("audio_play_sound", audioPlaySoundFunc);
 	GetFunctionByName("device_mouse_x_to_gui", deviceMouseXToGUIFunc);
 	GetFunctionByName("device_mouse_y_to_gui", deviceMouseYToGUIFunc);
@@ -545,6 +607,10 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	int drawTextOutlineIndex = getAssetIndexFromName("gml_Script_draw_text_outline") - 100000;
 	CScript* drawTextOutlineCScript = scriptList(drawTextOutlineIndex);
 	drawTextOutlineScript = drawTextOutlineCScript->s_pFunc->pScriptFunc;
+
+	int commandPrompsIndex = getAssetIndexFromName("gml_Script_commandPromps") - 100000;
+	CScript* commandPrompsCScript = scriptList(commandPrompsIndex);
+	commandPrompsScript = commandPrompsCScript->s_pFunc->pScriptFunc;
 
 	// Off it goes to the core.
 	return YYTK_OK;
