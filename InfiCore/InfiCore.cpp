@@ -8,6 +8,7 @@
 #include <iostream>
 #include <fstream>
 #include "json.hpp"
+#include <filesystem>
 #include "Utils/MH/MinHook.h"
 #include "Features/API/Internal.hpp"
 using json = nlohmann::json;
@@ -24,25 +25,53 @@ static struct Mod {
 } mod;
 
 // Config variables
-static struct Config {
-	bool debugEnabled = false;
+static enum SettingType {
+	SETTING_BOOL = 0
+};
+
+static struct Setting {
+	std::string name = "";
+	int icon = -1;
+	SettingType type = SETTING_BOOL;
+	bool boolValue = false;
+
+	Setting(std::string n, int i, bool bV) {
+		name = n;
+		icon = i;
+		type = SETTING_BOOL;
+		boolValue = bV;
+	}
+};
+
+static struct ModConfig {
+	Setting debugEnabled = Setting("debugEnabled", 9, false);
+	std::vector<Setting> settings = { debugEnabled };
 } config;
 
-void to_json(json& j, const Config& c) {
-	j = json{
-		{ "debugEnabled", c.debugEnabled }
+void to_json(json& j, const ModConfig& c) {
+	j = json {
+		"debugEnabled", {
+			{ "icon", c.debugEnabled.icon },
+			{ "value", c.debugEnabled.boolValue }
+		}
 	};
 }
 
-void from_json(const json& j, Config& c) {
+void from_json(const json& j, ModConfig& c) {
 	try {
-		j.at("debugEnabled").get_to(c.debugEnabled);
+		j.at("debugEnabled").at("icon").get_to(c.debugEnabled.icon);
+		j.at("debugEnabled").at("value").get_to(c.debugEnabled.boolValue);
 	} catch (const json::out_of_range& e) {
 		PrintError(__FILE__, __LINE__, "%s", e.what());
 		std::string fileName = formatString(std::string(mod.name)) + "-config.json";
 		GenerateConfig(fileName);
 	}
 }
+
+static struct RemoteConfig {
+	std::string name;
+	std::vector<Setting> settings;
+};
 
 std::string formatString(const std::string& input) {
 	std::string formattedString = input;
@@ -131,8 +160,8 @@ struct ArgSetup {
 		args[2].Kind = VALUE_STRING;
 		isInitialized = true;
 	}
-	ArgSetup(long long id, double priority, bool loop) {
-		args[0].I64 = id;
+	ArgSetup(const char* name, double priority, bool loop) {
+		args[0].I64 = getAssetIndexFromName(name);
 		args[0].Kind = VALUE_INT64;
 		args[1].Real = priority;
 		args[1].Kind = VALUE_REAL;
@@ -149,13 +178,13 @@ struct ArgSetup {
 		args[2].Kind = VALUE_REAL;
 		isInitialized = true;
 	}
-	ArgSetup(bool confirm, bool enter, bool cancel) {
-		args[0].I64 = confirm;
-		args[0].Kind = VALUE_BOOL;
-		args[1].I64 = enter;
-		args[1].Kind = VALUE_BOOL;
-		args[2].I64 = cancel;
-		args[2].Kind = VALUE_BOOL;
+	ArgSetup(double confirm, double enter, double cancel) {
+		args[0].Real = confirm;
+		args[0].Kind = VALUE_REAL;
+		args[1].Real = enter;
+		args[1].Kind = VALUE_REAL;
+		args[2].Real = cancel;
+		args[2].Kind = VALUE_REAL;
 		isInitialized = true;
 	}
 	ArgSetup(const char* name, double subimg, double x, double y) {
@@ -187,7 +216,7 @@ struct ArgSetup {
 		args[0].Kind = VALUE_REAL;
 		args[1].Real = y;
 		args[1].Kind = VALUE_REAL;
-		args[2].String = RefString::Alloc(text, strlen(text));
+		args[2].String = RefString::Alloc(text, strlen(text), false);
 		args[2].Kind = VALUE_STRING;
 		args[3].Real = len;
 		args[3].Kind = VALUE_REAL;
@@ -217,12 +246,10 @@ TRoutine variableInstanceSetFunc = nullptr;
 
 TRoutine scriptExecuteFunc = nullptr;
 ArgSetup args_configHeaderDraw;
+YYRValue* drawTextOutlineArgs[10];
 ArgSetup args_calculateScore;
 
-TRoutine arrayCreateFunc = nullptr;
-
 TRoutine variableGlobalGetFunc = nullptr;
-ArgSetup args_charSelected;
 ArgSetup args_version;
 ArgSetup args_textContainer;
 ArgSetup args_lastTitleOption;
@@ -235,20 +262,20 @@ ArgSetup args_drawSetAlpha;
 TRoutine drawSetColorFunc = nullptr;
 ArgSetup args_drawSetColor;
 
-TRoutine drawRectangleFunc = nullptr;
-ArgSetup args_drawRectangle;
-
-TRoutine drawButtonFunc = nullptr;
-
 TRoutine drawTextFunc = nullptr;
-ArgSetup args_drawSettingsSprite;
+ArgSetup args_drawConfigNameText;
 
 TRoutine drawSpriteFunc = nullptr;
+ArgSetup args_drawSettingsSprite;
+ArgSetup args_drawOptionButtonSprite;
+ArgSetup args_drawOptionIconSprite;
+ArgSetup args_drawToggleButtonSprite;
 
 PFUNC_YYGMLScript drawTextOutlineScript = nullptr;
 PFUNC_YYGMLScript commandPrompsScript = nullptr;
 
 ArgSetup args_commandPromps;
+YYRValue* commandPrompsArgs[3];
 
 TRoutine audioPlaySoundFunc = nullptr;
 ArgSetup args_audioPlaySound;
@@ -259,6 +286,14 @@ ArgSetup args_deviceMouse;
 
 TRoutine deviceMouseCheckButtonPressedFunc = nullptr;
 ArgSetup args_checkButtonPressed;
+
+TRoutine drawSetHAlignFunc = nullptr;
+TRoutine drawSetVAlignFunc = nullptr;
+ArgSetup args_halign;
+ArgSetup args_valign;
+
+TRoutine drawSetFontFunc = nullptr;
+ArgSetup args_drawSetFont;
 
 YYTKStatus MmGetScriptData(FNScriptData& outScript) {
 #ifdef _WIN64
@@ -297,7 +332,7 @@ void Hook(void* NewFunc, void* TargetFuncPointer, void** pfnOriginal, const char
 		else
 			MH_EnableHook(TargetFuncPointer);
 
-		if (config.debugEnabled) PrintMessage(CLR_GRAY, "- &%s = 0x%p", Name, TargetFuncPointer);
+		if (config.debugEnabled.boolValue) PrintMessage(CLR_GRAY, "- &%s = 0x%p", Name, TargetFuncPointer);
 	} else {
 		PrintMessage(
 			CLR_RED,
@@ -328,8 +363,32 @@ YYRValue yyrv_mouseY;
 static bool mouseMoved = false;
 int prev_mouseX = 0;
 int prev_mouseY = 0;
+
 static bool drawTitleChars = true;
 static bool drawConfigMenu = false;
+static bool configSelected = false;
+static std::vector<RemoteConfig> modConfigs;
+static int currentModConfig = 0;
+static int currentModSetting = 0;
+
+static void SetConfigSettings() {
+	for (int config = 0; config < modConfigs.size(); config++) {
+		std::ifstream inFile("modconfigs/" + modConfigs[config].name);
+		json data;
+		inFile >> data;
+		inFile.close();
+
+		for (int setting = 0; setting < modConfigs[config].settings.size(); setting++) {
+			if (modConfigs[config].settings[setting].type == SETTING_BOOL) {
+				data[modConfigs[config].settings[setting].name]["value"] = modConfigs[config].settings[setting].boolValue;
+			}
+		}
+
+		std::ofstream outFile("modconfigs/" + modConfigs[config].name);
+		outFile << data.dump(4);
+		outFile.close();
+	}
+}
 
 typedef YYRValue* (*ScriptFunc)(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args);
 
@@ -349,9 +408,132 @@ YYRValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRV
 			variableGlobalSetFunc(&result, Self, Other, 2, args_lastTitleOption.args);
 			drawTitleChars = false;
 			drawConfigMenu = true;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		} else if (configSelected == false) {
+			configSelected = true;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		} else if (configSelected == true) {
+			if (modConfigs[currentModConfig].settings[currentModSetting].type == SETTING_BOOL) {
+				modConfigs[currentModConfig].settings[currentModSetting].boolValue = !modConfigs[currentModConfig].settings[currentModSetting].boolValue;
+				args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
+				audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+			}
 		}
 	} else {
 		YYRValue* res = origConfirmedTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+	}
+	return res;
+};
+
+// gml_Script_ReturnMenu_gml_Object_obj_TitleScreen_Create_0
+ScriptFunc origReturnMenuTitleScreenScript = nullptr;
+YYRValue* ReturnMenuTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args) {
+	YYRValue* res = nullptr;
+	YYRValue yyrv_currentOption;
+	YYRValue yyrv_canControl;
+	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
+	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
+	if (static_cast<int>(yyrv_currentOption) == 3) { // 3 = mod configs button index
+		if (configSelected == true) {
+			configSelected = false;
+			currentModSetting = 0;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_back");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		} else if (static_cast<int>(yyrv_canControl) == 0)  {
+			args_canControl.args[2].Real = 1;
+			variableInstanceSetFunc(&result, Self, Other, 3, args_canControl.args);
+			args_lastTitleOption.args[1].Real = 3;
+			variableGlobalSetFunc(&result, Self, Other, 2, args_lastTitleOption.args);
+			drawTitleChars = true;
+			drawConfigMenu = false;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_back");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+			SetConfigSettings();
+		}
+	} else {
+		YYRValue* res = origReturnMenuTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+	}
+	return res;
+};
+
+// gml_Script_SelectLeft_gml_Object_obj_TitleScreen_Create_0
+ScriptFunc origSelectLeftTitleScreenScript = nullptr;
+YYRValue* SelectLeftTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args) {
+	YYRValue* res = nullptr;
+	YYRValue yyrv_currentOption;
+	YYRValue yyrv_canControl;
+	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
+	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
+	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
+		
+	} else {
+		YYRValue* res = origSelectLeftTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+	}
+	return res;
+};
+
+// gml_Script_SelectRight_gml_Object_obj_TitleScreen_Create_0
+ScriptFunc origSelectRightTitleScreenScript = nullptr;
+YYRValue* SelectRightTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args) {
+	YYRValue* res = nullptr;
+	YYRValue yyrv_currentOption;
+	YYRValue yyrv_canControl;
+	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
+	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
+	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
+
+	} else {
+		YYRValue* res = origSelectRightTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+	}
+	return res;
+};
+
+// gml_Script_SelectUp_gml_Object_obj_TitleScreen_Create_0
+ScriptFunc origSelectUpTitleScreenScript = nullptr;
+YYRValue* SelectUpTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args) {
+	YYRValue* res = nullptr;
+	YYRValue yyrv_currentOption;
+	YYRValue yyrv_canControl;
+	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
+	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
+	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
+		if (currentModConfig > 0 && configSelected == false) {
+			currentModConfig--;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		} else if (currentModSetting > 0 && configSelected == true) {
+			currentModSetting--;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		}
+	} else {
+		YYRValue* res = origSelectUpTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+	}
+	return res;
+};
+
+// gml_Script_SelectDown_gml_Object_obj_TitleScreen_Create_0
+ScriptFunc origSelectDownTitleScreenScript = nullptr;
+YYRValue* SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRValue* ReturnValue, int numArgs, YYRValue** Args) {
+	YYRValue* res = nullptr;
+	YYRValue yyrv_currentOption;
+	YYRValue yyrv_canControl;
+	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
+	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
+	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
+		if (currentModConfig < modConfigs.size() - 1 && configSelected == false) {
+			currentModConfig++;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		} else if (currentModSetting < modConfigs[currentModConfig].settings.size() - 1 && configSelected == true) {
+			currentModSetting++;
+			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
+			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		}
+	} else {
+		YYRValue* res = origSelectDownTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -404,7 +586,7 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 	CInstance* Other = std::get<1>(args);
 	CCode* Code = std::get<2>(args);
 	RValue* Res = std::get<3>(args);
-	int			Flags = std::get<4>(args);
+	int	Flags = std::get<4>(args);
 
 	if (!Code->i_pName) {
 		return YYTK_INVALIDARG;
@@ -421,11 +603,11 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				if (versionTextChanged == false) {
 					YYRValue yyrv_version;
 					variableGlobalGetFunc(&yyrv_version, Self, Other, 1, args_version.args);
-					if (config.debugEnabled) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : version", GetFileName(__FILE__).c_str(), __LINE__);
+					if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : version", GetFileName(__FILE__).c_str(), __LINE__);
 					if (yyrv_version.operator std::string().find("Modded") == std::string::npos) {
 						std::string moddedVerStr = yyrv_version.operator std::string() + " (Modded)";
 						CallBuiltin(yyrv_version, "variable_global_set", Self, Other, { "version", moddedVerStr.c_str() });
-						if (config.debugEnabled) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : version", GetFileName(__FILE__).c_str(), __LINE__);
+						if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : version", GetFileName(__FILE__).c_str(), __LINE__);
 					}
 					versionTextChanged = true;
 				}
@@ -434,9 +616,69 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				if (args_canControl.isInitialized == false) args_canControl = ArgSetup(Self->i_id, "canControl");
 				if (args_lastTitleOption.isInitialized == false) args_lastTitleOption = ArgSetup("lastTitleOption");
 				if (args_drawSettingsSprite.isInitialized == false) args_drawSettingsSprite = ArgSetup("hud_optionsmenu", 0, 320, 48);
-				if (args_commandPromps.isInitialized == false) args_commandPromps = ArgSetup(true, true, true);
-				/*if (args_configHeaderDraw.isInitialized == false)
-					args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);*/
+				if (args_drawOptionButtonSprite.isInitialized == false) args_drawOptionButtonSprite = ArgSetup("hud_OptionButton", 0, 320, 96);
+				if (args_drawConfigNameText.isInitialized == false) args_drawConfigNameText = ArgSetup(320, 96, "text");
+				if (args_halign.isInitialized == false) args_halign = ArgSetup(double(1));
+				if (args_valign.isInitialized == false) args_valign = ArgSetup(double(1));
+				if (args_drawSetFont.isInitialized == false) args_drawSetFont = ArgSetup((double)getAssetIndexFromName("jpFont_Big"));
+				if (args_drawOptionIconSprite.isInitialized == false) args_drawOptionIconSprite = ArgSetup("hud_graphicIcons", 0, 320, 48);
+				if (args_drawToggleButtonSprite.isInitialized == false) args_drawToggleButtonSprite = ArgSetup("hud_toggleButton", 0, 320, 48);
+				if (args_audioPlaySound.isInitialized == false) args_audioPlaySound = ArgSetup("snd_menu_confirm", 30, false);
+				if (args_commandPromps.isInitialized == false) {
+					args_commandPromps = ArgSetup((double)1, (double)1, (double)1);
+					commandPrompsArgs[0] = new YYRValue;
+					commandPrompsArgs[0]->Real = 1;
+					commandPrompsArgs[0]->Kind = VALUE_REAL;
+					commandPrompsArgs[1] = new YYRValue;
+					commandPrompsArgs[1]->Real = 1;
+					commandPrompsArgs[1]->Kind = VALUE_REAL;
+					commandPrompsArgs[2] = new YYRValue;
+					commandPrompsArgs[2]->Real = 1;
+					commandPrompsArgs[2]->Kind = VALUE_REAL;
+				}
+				if (args_configHeaderDraw.isInitialized == false) {
+					args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);
+
+					drawTextOutlineArgs[0] = new YYRValue;
+					drawTextOutlineArgs[0]->Real = (double)320;
+					drawTextOutlineArgs[0]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[1] = new YYRValue;
+					drawTextOutlineArgs[1]->Real = (double)(48 + 13);
+					drawTextOutlineArgs[1]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[2] = new YYRValue;
+					drawTextOutlineArgs[2]->String = RefString::Alloc("MOD CONFIGS", strlen("MOD CONFIGS"), false);
+					drawTextOutlineArgs[2]->Kind = VALUE_STRING;
+
+					drawTextOutlineArgs[3] = new YYRValue;
+					drawTextOutlineArgs[3]->Real = (double)1;
+					drawTextOutlineArgs[3]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[4] = new YYRValue;
+					drawTextOutlineArgs[4]->Real = (double)0;
+					drawTextOutlineArgs[4]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[5] = new YYRValue;
+					drawTextOutlineArgs[5]->Real = (double)32;
+					drawTextOutlineArgs[5]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[6] = new YYRValue;
+					drawTextOutlineArgs[6]->Real = (double)4;
+					drawTextOutlineArgs[6]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[7] = new YYRValue;
+					drawTextOutlineArgs[7]->Real = (double)300;
+					drawTextOutlineArgs[7]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[8] = new YYRValue;
+					drawTextOutlineArgs[8]->Real = (double)0;
+					drawTextOutlineArgs[8]->Kind = VALUE_REAL;
+
+					drawTextOutlineArgs[9] = new YYRValue;
+					drawTextOutlineArgs[9]->Real = (double)1;
+					drawTextOutlineArgs[9]->Kind = VALUE_REAL;
+				}
 
 				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
 			};
@@ -448,20 +690,20 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				YYRValue yyrv_textContainer;
 				if (args_textContainer.isInitialized == false) args_textContainer = ArgSetup("TextContainer");
 				variableGlobalGetFunc(&yyrv_textContainer, Self, Other, 1, args_textContainer.args);
-				if (config.debugEnabled) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : TextContainer", GetFileName(__FILE__).c_str(), __LINE__);
+				if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : TextContainer", GetFileName(__FILE__).c_str(), __LINE__);
 				YYRValue yyrv_titleButtons;
 				CallBuiltin(yyrv_titleButtons, "struct_get", Self, Other, { yyrv_textContainer, "titleButtons" });
-				if (config.debugEnabled) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : titleButtons", GetFileName(__FILE__).c_str(), __LINE__);
+				if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : titleButtons", GetFileName(__FILE__).c_str(), __LINE__);
 				YYRValue yyrv_eng;
 				CallBuiltin(yyrv_eng, "struct_get", Self, Other, { yyrv_titleButtons, "eng" });
-				if (config.debugEnabled) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : eng", GetFileName(__FILE__).c_str(), __LINE__);
+				if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : eng", GetFileName(__FILE__).c_str(), __LINE__);
 				if (std::string(yyrv_eng.RefArray->m_Array[0].String->Get()).find("Modded") == std::string::npos) {
 					yyrv_eng.RefArray->m_Array[0].String = &moddedRefStr;
-					if (config.debugEnabled) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[0]", GetFileName(__FILE__).c_str(), __LINE__);
+					if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[0]", GetFileName(__FILE__).c_str(), __LINE__);
 				}
 				if (std::string(yyrv_eng.RefArray->m_Array[3].String->Get()).find("Mod Configs") == std::string::npos) {
 					yyrv_eng.RefArray->m_Array[3].String = &configRefStr;
-					if (config.debugEnabled) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[3]", GetFileName(__FILE__).c_str(), __LINE__);
+					if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[3]", GetFileName(__FILE__).c_str(), __LINE__);
 				}
 			};
 			TextController_Create_0(pCodeEvent, Self, Other, Code, Res, Flags);
@@ -471,11 +713,141 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
 				
 				if (drawConfigMenu == true) {
-					drawSpriteFunc(&result, Self, Other, 4, args_drawSettingsSprite.args);
-					commandPrompsScript(Self, Other, &result, 3, reinterpret_cast<YYRValue**>(&args_commandPromps.args));
-				}
 
-				//drawTextOutlineScript(Self, Other, &result, 10, reinterpret_cast<YYRValue**>(&args_configHeaderDraw.args));
+					// Draw Mod Config Menu Background
+
+					drawSpriteFunc(&result, Self, Other, 4, args_drawSettingsSprite.args);
+
+					// Draw Controls Text
+										
+					commandPrompsScript(Self, Other, &result, 3, commandPrompsArgs);
+
+					if (configSelected == false) {
+						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont_Big");
+						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+
+						args_halign.args[0].Real = (double)1;
+						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+						// Draw Mod Config Menu Title
+
+						drawTextOutlineArgs[2]->String = RefString::Alloc("MOD CONFIGS", strlen("MOD CONFIGS"), false);
+						drawTextOutlineArgs[1]->Real = (double)(48 + 13);
+						drawTextOutlineArgs[8]->Real = (double)0;
+						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+						drawTextOutlineArgs[1]->Real = (double)(48 + 10);
+						drawTextOutlineArgs[8]->Real = (double)16777215;
+						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
+						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+
+						args_halign.args[0].Real = (double)1;
+						args_valign.args[0].Real = (double)0;
+						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+						drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
+
+						for (int i = 0; i < modConfigs.size(); i++) {
+							int y = 48 + 43 + (i * 34);
+
+							// Draw Config Background
+
+							args_drawOptionButtonSprite.args[2].Real = 320;
+							args_drawOptionButtonSprite.args[3].Real = y;
+							args_drawOptionButtonSprite.args[1].Real = (currentModConfig == i);
+							drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
+
+							args_drawSetColor.args[0].Real = (currentModConfig == i ? 0 : 16777215);
+							drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+
+							// Draw Config Name
+
+							args_drawConfigNameText.args[0].I64 = (long long)320;
+							args_drawConfigNameText.args[1].I64 = (long long)y + 8;
+							args_drawConfigNameText.args[2].String = RefString::Alloc(modConfigs[i].name.c_str(), strlen(modConfigs[i].name.c_str()), false);
+							drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
+						}
+
+						args_halign.args[0].Real = (double)0;
+						args_valign.args[0].Real = (double)0;
+						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+						drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
+					} else { // configSelected == true
+						args_halign.args[0].Real = (double)1;
+						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
+						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+
+						// Draw Config Name
+
+						drawTextOutlineArgs[2]->String = RefString::Alloc(modConfigs[currentModConfig].name.c_str(), strlen(modConfigs[currentModConfig].name.c_str()), false);
+						drawTextOutlineArgs[1]->Real = (double)(48 + 19);
+						drawTextOutlineArgs[8]->Real = (double)0;
+						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+						drawTextOutlineArgs[1]->Real = (double)(48 + 16);
+						drawTextOutlineArgs[8]->Real = (double)16777215;
+						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+						args_halign.args[0].Real = (double)0;
+						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+						int currSetting = 0;
+
+						for (int i = 0; i < modConfigs[currentModConfig].settings.size(); i++) {
+							if (modConfigs[currentModConfig].settings[i].type == SETTING_BOOL) {
+								int y = 48 + 43 + (currSetting * 34);
+
+								// Draw Setting Background
+
+								args_drawOptionButtonSprite.args[2].Real = 320 + 12;
+								args_drawOptionButtonSprite.args[3].Real = y;
+								args_drawOptionButtonSprite.args[1].Real = (currentModSetting == currSetting);
+								drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
+
+								args_drawSetColor.args[0].Real = (currentModSetting == currSetting ? 0 : 16777215);
+								drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+
+								// Draw Setting Name
+
+								args_drawConfigNameText.args[0].I64 = (long long)320 - 66;
+								args_drawConfigNameText.args[1].I64 = (long long)y + 8;
+								args_drawConfigNameText.args[2].String = RefString::Alloc(modConfigs[currentModConfig].settings[i].name.c_str(), strlen(modConfigs[currentModConfig].settings[i].name.c_str()), false);
+								drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
+
+								// Draw Setting Icon
+								// 0 - 8 = hud_optionIcons
+								// 9 - 21 = hud_graphicIcons
+
+								int iconIndex = modConfigs[currentModConfig].settings[i].icon;
+								int actualIndex = iconIndex * 2;
+								if (actualIndex > 17) {
+									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_graphicIcons");
+									actualIndex -= 18;
+								} else {
+									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_optionIcons");
+								}
+								if (actualIndex > -1) {
+									args_drawOptionIconSprite.args[1].Real = (currentModSetting == currSetting ? actualIndex + 1 : actualIndex);
+									args_drawOptionIconSprite.args[2].Real = 320 - 98;
+									args_drawOptionIconSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
+									drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
+								}
+
+								// Draw Setting Checkbox
+
+								args_drawToggleButtonSprite.args[1].Real = modConfigs[currentModConfig].settings[i].boolValue + (2 * (currentModSetting == currSetting));
+								args_drawToggleButtonSprite.args[2].Real = 320 + 81;
+								args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
+								drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
+
+								currSetting++;
+							}
+						}
+					}
+				}
 			};
 			TitleScreen_Draw_0(pCodeEvent, Self, Other, Code, Res, Flags);
 			codeFuncTable[Code->i_CodeIndex] = TitleScreen_Draw_0;
@@ -574,7 +946,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 				return YYTK_FAIL;
 			}
 
-			config = data.template get<Config>();
+			config = data.template get<ModConfig>();
 		}
 		PrintMessage(CLR_GREEN, "[%s v%d.%d.%d] - %s loaded successfully!", mod.name, mod.version.major, mod.version.minor, mod.version.build, fileName.c_str());
 	}
@@ -587,8 +959,6 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	GetFunctionByName("variable_global_set", variableGlobalSetFunc);
 	GetFunctionByName("draw_set_alpha", drawSetAlphaFunc);
 	GetFunctionByName("draw_set_color", drawSetColorFunc);
-	GetFunctionByName("draw_rectangle", drawRectangleFunc);
-	GetFunctionByName("draw_button", drawButtonFunc);
 	GetFunctionByName("draw_text", drawTextFunc);
 	GetFunctionByName("draw_sprite", drawSpriteFunc);
 	GetFunctionByName("audio_play_sound", audioPlaySoundFunc);
@@ -596,13 +966,20 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	GetFunctionByName("device_mouse_y_to_gui", deviceMouseYToGUIFunc);
 	GetFunctionByName("device_mouse_check_button_pressed", deviceMouseCheckButtonPressedFunc);
 	GetFunctionByName("method_call", scriptExecuteFunc);
-	GetFunctionByName("array_create", arrayCreateFunc);
+	GetFunctionByName("draw_set_halign", drawSetHAlignFunc);
+	GetFunctionByName("draw_set_valign", drawSetVAlignFunc);
+	GetFunctionByName("draw_set_font", drawSetFontFunc);
 
 	// Function Hooks
 	MH_Initialize();
 	MmGetScriptData(scriptList);
 
 	HookScriptFunction("gml_Script_Confirmed_gml_Object_obj_TitleScreen_Create_0", (void*)&ConfirmedTitleScreenFuncDetour, (void**)&origConfirmedTitleScreenScript);
+	HookScriptFunction("gml_Script_ReturnMenu_gml_Object_obj_TitleScreen_Create_0", (void*)&ReturnMenuTitleScreenFuncDetour, (void**)&origReturnMenuTitleScreenScript);
+	HookScriptFunction("gml_Script_SelectLeft_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectLeftTitleScreenFuncDetour, (void**)&origSelectLeftTitleScreenScript);
+	HookScriptFunction("gml_Script_SelectRight_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectRightTitleScreenFuncDetour, (void**)&origSelectRightTitleScreenScript);
+	HookScriptFunction("gml_Script_SelectUp_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectUpTitleScreenFuncDetour, (void**)&origSelectUpTitleScreenScript);
+	HookScriptFunction("gml_Script_SelectDown_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectDownTitleScreenFuncDetour, (void**)&origSelectDownTitleScreenScript);
 
 	int drawTextOutlineIndex = getAssetIndexFromName("gml_Script_draw_text_outline") - 100000;
 	CScript* drawTextOutlineCScript = scriptList(drawTextOutlineIndex);
@@ -611,6 +988,32 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	int commandPrompsIndex = getAssetIndexFromName("gml_Script_commandPromps") - 100000;
 	CScript* commandPrompsCScript = scriptList(commandPrompsIndex);
 	commandPrompsScript = commandPrompsCScript->s_pFunc->pScriptFunc;
+
+	// Mod Configs
+	std::filesystem::path currPath = std::filesystem::current_path();
+	currPath /= "modconfigs";
+	for (const auto& entry : std::filesystem::directory_iterator(currPath)) {
+		std::string configName = entry.path().filename().string();
+		RemoteConfig newConfig;
+		newConfig.name = configName;
+
+		std::ifstream file("modconfigs/" + configName);
+		json data;
+		file >> data;
+
+		for (json::iterator it = data.begin(); it != data.end(); ++it) {
+			std::string key = it.key();
+			json setting = it.value();
+			if (setting.find("value") != setting.end() && setting["value"].is_boolean()) {
+				int iconIndex = -1;
+				if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
+				Setting newSetting(key, iconIndex, setting["value"]);
+				newConfig.settings.push_back(newSetting);
+			}
+		}
+
+		modConfigs.push_back(newConfig);
+	}
 
 	// Off it goes to the core.
 	return YYTK_OK;
