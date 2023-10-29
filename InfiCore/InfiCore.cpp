@@ -73,6 +73,12 @@ static struct RemoteConfig {
 	std::vector<Setting> settings;
 };
 
+static struct RemoteMod {
+	std::string name;
+	bool enabled;
+	RemoteConfig config;
+};
+
 std::string formatString(const std::string& input) {
 	std::string formattedString = input;
 
@@ -367,24 +373,24 @@ int prev_mouseY = 0;
 static bool drawTitleChars = true;
 static bool drawConfigMenu = false;
 static bool configSelected = false;
-static std::vector<RemoteConfig> modConfigs;
-static int currentModConfig = 0;
+static std::vector<RemoteMod> mods;
+static int currentMod = 0;
 static int currentModSetting = 0;
 
 static void SetConfigSettings() {
-	for (int config = 0; config < modConfigs.size(); config++) {
-		std::ifstream inFile("modconfigs/" + modConfigs[config].name);
+	for (int mod = 0; mod < mods.size(); mod++) {
+		std::ifstream inFile("modconfigs/" + mods[mod].config.name);
 		json data;
 		inFile >> data;
 		inFile.close();
 
-		for (int setting = 0; setting < modConfigs[config].settings.size(); setting++) {
-			if (modConfigs[config].settings[setting].type == SETTING_BOOL) {
-				data[modConfigs[config].settings[setting].name]["value"] = modConfigs[config].settings[setting].boolValue;
+		for (int setting = 0; setting < mods[mod].config.settings.size(); setting++) {
+			if (mods[mod].config.settings[setting].type == SETTING_BOOL) {
+				data[mods[mod].config.settings[setting].name]["value"] = mods[mod].config.settings[setting].boolValue;
 			}
 		}
 
-		std::ofstream outFile("modconfigs/" + modConfigs[config].name);
+		std::ofstream outFile("modconfigs/" + mods[mod].config.name);
 		outFile << data.dump(4);
 		outFile.close();
 	}
@@ -415,8 +421,8 @@ YYRValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRV
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
 		} else if (configSelected == true) {
-			if (modConfigs[currentModConfig].settings[currentModSetting].type == SETTING_BOOL) {
-				modConfigs[currentModConfig].settings[currentModSetting].boolValue = !modConfigs[currentModConfig].settings[currentModSetting].boolValue;
+			if (mods[currentMod].config.settings[currentModSetting].type == SETTING_BOOL) {
+				mods[currentMod].config.settings[currentModSetting].boolValue = !mods[currentMod].config.settings[currentModSetting].boolValue;
 				args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
 				audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
 			}
@@ -499,8 +505,8 @@ YYRValue* SelectUpTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRVa
 	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
 	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
 	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
-		if (currentModConfig > 0 && configSelected == false) {
-			currentModConfig--;
+		if (currentMod > 0 && configSelected == false) {
+			currentMod--;
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
 		} else if (currentModSetting > 0 && configSelected == true) {
@@ -523,11 +529,11 @@ YYRValue* SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYR
 	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
 	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
 	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
-		if (currentModConfig < modConfigs.size() - 1 && configSelected == false) {
-			currentModConfig++;
+		if (currentMod < mods.size() - 1 && configSelected == false) {
+			currentMod++;
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
-		} else if (currentModSetting < modConfigs[currentModConfig].settings.size() - 1 && configSelected == true) {
+		} else if (currentModSetting < mods[currentMod].config.settings.size() - 1 && configSelected == true) {
 			currentModSetting++;
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_select");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
@@ -565,7 +571,7 @@ static std::unordered_map<int, std::function<void(YYTKCodeEvent* pCodeEvent, CIn
 
 static const char* moddedStr = "Play Modded!";
 RefString moddedRefStr = RefString(moddedStr, strlen(moddedStr), false);
-static const char* configStr = "Mod Configs";
+static const char* configStr = "Mod Settings";
 RefString configRefStr = RefString(configStr, strlen(configStr), false);
 static bool versionTextChanged = false;
 
@@ -648,7 +654,7 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 					drawTextOutlineArgs[1]->Kind = VALUE_REAL;
 
 					drawTextOutlineArgs[2] = new YYRValue;
-					drawTextOutlineArgs[2]->String = RefString::Alloc("MOD CONFIGS", strlen("MOD CONFIGS"), false);
+					drawTextOutlineArgs[2]->String = RefString::Alloc("MOD SETTINGS", strlen("MOD SETTINGS"), false);
 					drawTextOutlineArgs[2]->Kind = VALUE_STRING;
 
 					drawTextOutlineArgs[3] = new YYRValue;
@@ -729,9 +735,9 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 						args_halign.args[0].Real = (double)1;
 						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
 
-						// Draw Mod Config Menu Title
+						// Draw Mod Settings Menu Title
 
-						drawTextOutlineArgs[2]->String = RefString::Alloc("MOD CONFIGS", strlen("MOD CONFIGS"), false);
+						drawTextOutlineArgs[2]->String = RefString::Alloc("MOD SETTINGS", strlen("MOD SETTINGS"), false);
 						drawTextOutlineArgs[1]->Real = (double)(48 + 13);
 						drawTextOutlineArgs[8]->Real = (double)0;
 						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
@@ -743,36 +749,37 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
 						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
 
-						args_halign.args[0].Real = (double)1;
-						args_valign.args[0].Real = (double)0;
+						args_halign.args[0].Real = (double)0;
 						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-						drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
 
-						for (int i = 0; i < modConfigs.size(); i++) {
+						for (int i = 0; i < mods.size(); i++) {
 							int y = 48 + 43 + (i * 34);
 
-							// Draw Config Background
+							// Draw Mod Background
 
 							args_drawOptionButtonSprite.args[2].Real = 320;
 							args_drawOptionButtonSprite.args[3].Real = y;
-							args_drawOptionButtonSprite.args[1].Real = (currentModConfig == i);
+							args_drawOptionButtonSprite.args[1].Real = (currentMod == i);
 							drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
 
-							args_drawSetColor.args[0].Real = (currentModConfig == i ? 0 : 16777215);
+							args_drawSetColor.args[0].Real = (currentMod == i ? 0 : 16777215);
 							drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
 
-							// Draw Config Name
+							// Draw Mod Name
 
-							args_drawConfigNameText.args[0].I64 = (long long)320;
+							args_drawConfigNameText.args[0].I64 = (long long)320 - 78;
 							args_drawConfigNameText.args[1].I64 = (long long)y + 8;
-							args_drawConfigNameText.args[2].String = RefString::Alloc(modConfigs[i].name.c_str(), strlen(modConfigs[i].name.c_str()), false);
+							args_drawConfigNameText.args[2].String = RefString::Alloc(mods[i].name.c_str(), strlen(mods[i].name.c_str()), false);
 							drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
+
+							// Draw Mod Checkbox
+
+							args_drawToggleButtonSprite.args[1].Real = mods[i].enabled + (2 * (currentMod == i));
+							args_drawToggleButtonSprite.args[2].Real = 320 + 69;
+							args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (i * 34);
+							drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
 						}
 
-						args_halign.args[0].Real = (double)0;
-						args_valign.args[0].Real = (double)0;
-						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-						drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
 					} else { // configSelected == true
 						args_halign.args[0].Real = (double)1;
 						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
@@ -782,7 +789,7 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 
 						// Draw Config Name
 
-						drawTextOutlineArgs[2]->String = RefString::Alloc(modConfigs[currentModConfig].name.c_str(), strlen(modConfigs[currentModConfig].name.c_str()), false);
+						drawTextOutlineArgs[2]->String = RefString::Alloc(mods[currentMod].config.name.c_str(), strlen(mods[currentMod].config.name.c_str()), false);
 						drawTextOutlineArgs[1]->Real = (double)(48 + 19);
 						drawTextOutlineArgs[8]->Real = (double)0;
 						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
@@ -796,8 +803,8 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 
 						int currSetting = 0;
 
-						for (int i = 0; i < modConfigs[currentModConfig].settings.size(); i++) {
-							if (modConfigs[currentModConfig].settings[i].type == SETTING_BOOL) {
+						for (int i = 0; i < mods[currentMod].config.settings.size(); i++) {
+							if (mods[currentMod].config.settings[i].type == SETTING_BOOL) {
 								int y = 48 + 43 + (currSetting * 34);
 
 								// Draw Setting Background
@@ -814,14 +821,14 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 
 								args_drawConfigNameText.args[0].I64 = (long long)320 - 66;
 								args_drawConfigNameText.args[1].I64 = (long long)y + 8;
-								args_drawConfigNameText.args[2].String = RefString::Alloc(modConfigs[currentModConfig].settings[i].name.c_str(), strlen(modConfigs[currentModConfig].settings[i].name.c_str()), false);
+								args_drawConfigNameText.args[2].String = RefString::Alloc(mods[currentMod].config.settings[i].name.c_str(), strlen(mods[currentMod].config.settings[i].name.c_str()), false);
 								drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
 
 								// Draw Setting Icon
 								// 0 - 8 = hud_optionIcons
 								// 9 - 21 = hud_graphicIcons
 
-								int iconIndex = modConfigs[currentModConfig].settings[i].icon;
+								int iconIndex = mods[currentMod].config.settings[i].icon;
 								int actualIndex = iconIndex * 2;
 								if (actualIndex > 17) {
 									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_graphicIcons");
@@ -838,7 +845,7 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 
 								// Draw Setting Checkbox
 
-								args_drawToggleButtonSprite.args[1].Real = modConfigs[currentModConfig].settings[i].boolValue + (2 * (currentModSetting == currSetting));
+								args_drawToggleButtonSprite.args[1].Real = mods[currentMod].config.settings[i].boolValue + (2 * (currentModSetting == currSetting));
 								args_drawToggleButtonSprite.args[2].Real = 320 + 81;
 								args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
 								drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
@@ -892,31 +899,33 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 		return YYTK_FAIL;
 	}
 
-	// Register a callback for frame events
-	YYTKStatus Status = PmCreateCallback(
+	// Register a prioritized callback for frame events
+	YYTKStatus Status = PmCreateCallbackEx(
 		PluginAttributes,					// Plugin Attributes
-		g_pFrameCallbackAttributes,				// (out) Callback Attributes
+		999,								// Callback Priority
 		FrameCallback,						// The function to register as a callback
 		static_cast<EventType>(EVT_PRESENT | EVT_ENDSCENE), // Which events trigger this callback
-		nullptr								// The optional argument to pass to the function
+		nullptr,							// The optional argument to pass to the function
+		g_pFrameCallbackAttributes			// (out) Callback Attributes
 	);
 
 	if (Status) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmCreateCallback failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
+		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmCreateCallbackEx failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
 		return YYTK_FAIL;
 	}
 
-	// Register a callback for frame events
-	Status = PmCreateCallback(
+	// Register a prioritized callback for code events
+	Status = PmCreateCallbackEx(
 		PluginAttributes,					// Plugin Attributes
-		g_pCodeCallbackAttributes,			// (out) Callback Attributes
+		999,								// Callback Priority
 		CodeCallback,						// The function to register as a callback
 		static_cast<EventType>(EVT_CODE_EXECUTE), // Which events trigger this callback
-		nullptr								// The optional argument to pass to the function
+		nullptr,							// The optional argument to pass to the function
+		g_pCodeCallbackAttributes			// (out) Callback Attributes
 	);
 
 	if (Status) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmCreateCallback failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
+		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmCreateCallbackEx failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
 		return YYTK_FAIL;
 	}
 
@@ -989,30 +998,67 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	CScript* commandPrompsCScript = scriptList(commandPrompsIndex);
 	commandPrompsScript = commandPrompsCScript->s_pFunc->pScriptFunc;
 
-	// Mod Configs
-	std::filesystem::path currPath = std::filesystem::current_path();
-	currPath /= "modconfigs";
-	for (const auto& entry : std::filesystem::directory_iterator(currPath)) {
-		std::string configName = entry.path().filename().string();
-		RemoteConfig newConfig;
-		newConfig.name = configName;
+	// Find Mods
+	std::string enabledModPath = "autoexec";
+	for (const auto& entry : std::filesystem::directory_iterator(enabledModPath)) {
+		std::string modName = entry.path().filename().string();
+		RemoteMod newMod;
+		newMod.name = modName;
+		newMod.enabled = true;
+		mods.push_back(newMod);
+	}
+	std::string disabledModPath = "disabledmods";
+	for (const auto& entry : std::filesystem::directory_iterator(disabledModPath)) {
+		std::string modName = entry.path().filename().string();
+		RemoteMod newMod;
+		newMod.name = modName;
+		newMod.enabled = false;
+		mods.push_back(newMod);
+	}
+	
+	// Sort Mods Alphabetically
+	std::sort(mods.begin(), mods.end(), [](const RemoteMod& a, const RemoteMod& b) {
+		return a.name < b.name;
+	});
 
-		std::ifstream file("modconfigs/" + configName);
-		json data;
-		file >> data;
+	// Get Configs for Mods
+	for (RemoteMod& mod : mods) {
+		std::string configName = mod.name.substr(0, mod.name.size() - 4) + "-config.json";
+		std::filesystem::path configPath = "modconfigs/" + configName;
 
-		for (json::iterator it = data.begin(); it != data.end(); ++it) {
-			std::string key = it.key();
-			json setting = it.value();
-			if (setting.find("value") != setting.end() && setting["value"].is_boolean()) {
-				int iconIndex = -1;
-				if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
-				Setting newSetting(key, iconIndex, setting["value"]);
-				newConfig.settings.push_back(newSetting);
+		if (std::filesystem::exists(configPath)) {
+			RemoteConfig config;
+			config.name = configName;
+
+			std::ifstream file(configPath);
+			json data;
+			file >> data;
+
+			for (json::iterator it = data.begin(); it != data.end(); ++it) {
+				std::string key = it.key();
+				json setting = it.value();
+				if (setting.find("value") != setting.end() && setting["value"].is_boolean()) {
+					int iconIndex = -1;
+					if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
+					Setting newSetting(key, iconIndex, setting["value"]);
+					config.settings.insert(config.settings.begin(), newSetting);
+				}
 			}
-		}
 
-		modConfigs.push_back(newConfig);
+			// Move "enabled" Setting to Front
+
+			auto it = std::find_if(config.settings.begin(), config.settings.end(), [](const Setting& setting) {
+				return setting.name == "enabled";
+			});
+
+			if (it != config.settings.end()) {
+				Setting enabledSetting = *it;
+				config.settings.erase(it);
+				config.settings.insert(config.settings.begin(), enabledSetting);
+			}
+				 
+			mod.config = config;
+		}
 	}
 
 	// Off it goes to the core.
