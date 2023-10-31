@@ -120,6 +120,10 @@ void API::PluginManager::RunHooks(YYTKEventBase* pEvent)
 			return Attribute.first > OtherAttribute.first;
 		}
 	);
+
+	// Finally, don't forget to run the now-sorted callbacks
+	for (auto& [Priority, CallbackAttributes] : sorted_attributes)
+		CallbackAttributes.Callback(pEvent, CallbackAttributes.Argument);
 }
 
 std::string API::PluginManager::GetPluginVersionString(HMODULE Plugin)
@@ -233,7 +237,6 @@ YYTKStatus API::PluginManager::PmCreateCallback(PluginAttributes_t* pObjectAttri
 	// The last plugin (by load order) will have the lowest priority
 	// The first plugin (by load order) will have the highest priority up to g_PluginStorage.size() - 1
 	uint32_t callback_priority = std::distance(plugin_position, g_PluginStorage.end());
-
 	return PmCreateCallbackEx(
 		pObjectAttributes,
 		callback_priority,

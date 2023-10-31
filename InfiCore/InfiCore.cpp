@@ -75,8 +75,9 @@ static struct RemoteConfig {
 
 static struct RemoteMod {
 	std::string name;
-	bool enabled;
+	bool enabled = false;
 	RemoteConfig config;
+	bool hasConfig = false;
 };
 
 std::string formatString(const std::string& input) {
@@ -216,7 +217,29 @@ struct ArgSetup {
 		args[4].I64 = isOutline;
 		args[4].Kind = VALUE_BOOL;
 		isInitialized = true;
-	}	// (double)320, (double)(48 + 13), "TEST", (double)1, (long long)0, (double)32, (double)4, (double)100, (long long)0, (double)1)
+	}
+	// "hud_shopButton", 1, 320, 48, 0.75, 0.75, 0, 16777215, 1
+	ArgSetup(const char* sprite, double subimg, double x, double y, double xscale, double yscale, double rot, long long color, double alpha) {
+		args[0].I64 = getAssetIndexFromName(sprite);
+		args[0].Kind = VALUE_INT64;
+		args[1].Real = subimg;
+		args[1].Kind = VALUE_REAL;
+		args[2].Real = x;
+		args[2].Kind = VALUE_REAL;
+		args[3].Real = y;
+		args[3].Kind = VALUE_REAL;
+		args[4].Real = xscale;
+		args[4].Kind = VALUE_REAL;
+		args[5].Real = yscale;
+		args[5].Kind = VALUE_REAL;
+		args[6].Real = rot;
+		args[6].Kind = VALUE_REAL;
+		args[7].I64 = color;
+		args[7].Kind = VALUE_INT64;
+		args[8].Real = alpha;
+		args[8].Kind = VALUE_REAL;
+	}
+	// (double)320, (double)(48 + 13), "TEST", (double)1, (long long)0, (double)32, (double)4, (double)100, (long long)0, (double)1)
 	ArgSetup(double x, double y, const char* text, double len, double color0, double angleIncrement, double sep, double w, double color1, double alpha) {
 		args[0].Real = x;
 		args[0].Kind = VALUE_REAL;
@@ -276,6 +299,10 @@ ArgSetup args_drawSettingsSprite;
 ArgSetup args_drawOptionButtonSprite;
 ArgSetup args_drawOptionIconSprite;
 ArgSetup args_drawToggleButtonSprite;
+
+TRoutine drawSpriteExtFunc = nullptr;
+ArgSetup args_drawShopButtonSpriteExt;
+ArgSetup args_drawToggleButtonSpriteExt;
 
 PFUNC_YYGMLScript drawTextOutlineScript = nullptr;
 PFUNC_YYGMLScript commandPrompsScript = nullptr;
@@ -372,7 +399,10 @@ int prev_mouseY = 0;
 
 static bool drawTitleChars = true;
 static bool drawConfigMenu = false;
+static bool configHovered = false;
 static bool configSelected = false;
+static bool noConfigError = false;
+static int noConfigErrorTimer = 0;
 static std::vector<RemoteMod> mods;
 static int currentMod = 0;
 static int currentModSetting = 0;
@@ -380,6 +410,10 @@ static int currentModSetting = 0;
 static void SetConfigSettings() {
 	for (int mod = 0; mod < mods.size(); mod++) {
 		std::ifstream inFile("modconfigs/" + mods[mod].config.name);
+		if (inFile.fail()) {
+			PrintError(__FILE__, __LINE__, "Config for \"%s\" not found!", mods[mod].name);
+			continue;
+		}
 		json data;
 		inFile >> data;
 		inFile.close();
@@ -416,10 +450,21 @@ YYRValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRV
 			drawConfigMenu = true;
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
-		} else if (configSelected == false) {
-			configSelected = true;
+		} else if (configHovered == false) {
+			mods[currentMod].enabled = !mods[currentMod].enabled;
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+		} else if (configSelected == false) {
+			if (mods[currentMod].hasConfig == false) {
+				noConfigError = true;
+				noConfigErrorTimer = 60;
+				args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_alert");
+				audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+			} else {
+				configSelected = true;
+				args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
+				audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+			}
 		} else if (configSelected == true) {
 			if (mods[currentMod].config.settings[currentModSetting].type == SETTING_BOOL) {
 				mods[currentMod].config.settings[currentModSetting].boolValue = !mods[currentMod].config.settings[currentModSetting].boolValue;
@@ -473,7 +518,13 @@ YYRValue* SelectLeftTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYR
 	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
 	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
 	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
-		
+		if (configSelected == false) {
+			if (configHovered == true) {
+				configHovered = false;
+				args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_charSelectWoosh");
+				audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+			}
+		}
 	} else {
 		YYRValue* res = origSelectLeftTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
@@ -489,7 +540,13 @@ YYRValue* SelectRightTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YY
 	variableInstanceGetFunc(&yyrv_canControl, Self, Other, 2, args_canControl.args);
 	variableInstanceGetFunc(&yyrv_currentOption, Self, Other, 2, args_currentOption.args);
 	if (static_cast<int>(yyrv_currentOption) == 3 && drawConfigMenu == true) { // 3 = mod configs button index
-
+		if (configSelected == false) {
+			if (configHovered == false) {
+				configHovered = true;
+				args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_charSelectWoosh");
+				audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
+			}
+		}
 	} else {
 		YYRValue* res = origSelectRightTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
@@ -578,6 +635,11 @@ static bool versionTextChanged = false;
 // This callback is registered on EVT_PRESENT and EVT_ENDSCENE, so it gets called every frame on DX9 / DX11 games.
 YYTKStatus FrameCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 	FrameNumber++;
+	if (noConfigErrorTimer > 0) {
+		noConfigErrorTimer--;
+	} else if (noConfigError == true) {
+		noConfigError = false;
+	}
 	// Tell the core the handler was successful.
 	return YYTK_OK;
 }
@@ -630,6 +692,8 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				if (args_drawOptionIconSprite.isInitialized == false) args_drawOptionIconSprite = ArgSetup("hud_graphicIcons", 0, 320, 48);
 				if (args_drawToggleButtonSprite.isInitialized == false) args_drawToggleButtonSprite = ArgSetup("hud_toggleButton", 0, 320, 48);
 				if (args_audioPlaySound.isInitialized == false) args_audioPlaySound = ArgSetup("snd_menu_confirm", 30, false);
+				if (args_drawShopButtonSpriteExt.isInitialized == false) args_drawShopButtonSpriteExt = ArgSetup("hud_shopButton", 1, 320 + 160, 48, 0.75, 0.75, 0, 16777215, 1);
+				if (args_drawToggleButtonSpriteExt.isInitialized == false) args_drawToggleButtonSpriteExt = ArgSetup("hud_toggleButton", 0, 320 + 160, 48, 1, 1, 0, 0, 1);
 				if (args_commandPromps.isInitialized == false) {
 					args_commandPromps = ArgSetup((double)1, (double)1, (double)1);
 					commandPrompsArgs[0] = new YYRValue;
@@ -759,10 +823,10 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 
 							args_drawOptionButtonSprite.args[2].Real = 320;
 							args_drawOptionButtonSprite.args[3].Real = y;
-							args_drawOptionButtonSprite.args[1].Real = (currentMod == i);
+							args_drawOptionButtonSprite.args[1].Real = (currentMod == i && !configHovered);
 							drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
 
-							args_drawSetColor.args[0].Real = (currentMod == i ? 0 : 16777215);
+							args_drawSetColor.args[0].Real = (currentMod == i && !configHovered ? 0 : 16777215);
 							drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
 
 							// Draw Mod Name
@@ -774,10 +838,79 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 
 							// Draw Mod Checkbox
 
-							args_drawToggleButtonSprite.args[1].Real = mods[i].enabled + (2 * (currentMod == i));
-							args_drawToggleButtonSprite.args[2].Real = 320 + 69;
-							args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (i * 34);
-							drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
+							if (configHovered == false || currentMod != i || (configHovered == true && currentMod == i)) {
+								args_drawToggleButtonSprite.args[1].Real = mods[i].enabled + (!configHovered * 2 * (currentMod == i));
+								args_drawToggleButtonSprite.args[2].Real = 320 + 69;
+								args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (i * 34);
+								drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
+							} else {
+								args_drawToggleButtonSpriteExt.args[1].Real = mods[i].enabled;
+								args_drawToggleButtonSpriteExt.args[2].Real = 320 + 69;
+								args_drawToggleButtonSpriteExt.args[3].Real = (double)48 + 56 + (i * 34);
+								drawSpriteExtFunc(&result, Self, Other, 9, args_drawToggleButtonSpriteExt.args);
+							}
+
+							// Draw Config Button
+
+							if (currentMod == i) {
+								
+								// Draw Config Button Background
+
+								if (configHovered == false) {
+									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_shopButton");
+									args_drawOptionIconSprite.args[1].Real = 0;
+									args_drawOptionIconSprite.args[2].Real = (double)320 + 160;
+									args_drawOptionIconSprite.args[3].Real = (double)y + 14;
+									drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
+								} else {
+									args_drawShopButtonSpriteExt.args[3].Real = (double)y + 14;
+									drawSpriteExtFunc(&result, Self, Other, 9, args_drawShopButtonSpriteExt.args);
+								}
+
+								// Draw Left/Right Arrow
+								
+								args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_scrollArrows2");
+								args_drawOptionIconSprite.args[1].Real = !configHovered;
+								args_drawOptionIconSprite.args[2].Real = (double)320 + 104;
+								args_drawOptionIconSprite.args[3].Real = (double)y + 14;
+								drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
+
+								args_halign.args[0].Real = (double)1;
+								drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+								args_valign.args[0].Real = (double)1;
+								drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
+
+								// Draw Config Text
+
+								args_drawConfigNameText.args[1].I64 = (long long)y + 16;
+								if (mods[currentMod].hasConfig == false) {
+									if (noConfigError == true) {
+										std::string errorStr = (noConfigErrorTimer % 10 < 5 ? "" : "NO CONFIG");
+										args_drawConfigNameText.args[2].String = RefString::Alloc(errorStr.c_str(), strlen(errorStr.c_str()), false);
+									} else {
+										args_drawConfigNameText.args[2].String = RefString::Alloc("NO CONFIG", strlen("NO CONFIG"), false);
+									}
+									args_drawSetColor.args[0].Real = 255;
+									drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+									args_drawConfigNameText.args[0].I64 = (long long)320 + 161;
+								} else {
+									if (configHovered == false) {
+										args_drawSetColor.args[0].Real = 16777215;
+									} else {
+										args_drawSetColor.args[0].Real = 0;
+									}
+									drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+									args_drawConfigNameText.args[0].I64 = (long long)320 + 161;
+									args_drawConfigNameText.args[2].String = RefString::Alloc("CONFIG", strlen("CONFIG"), false);
+								}
+
+								drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
+
+								args_halign.args[0].Real = (double)0;
+								drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+								args_valign.args[0].Real = (double)0;
+								drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
+							}
 						}
 
 					} else { // configSelected == true
@@ -970,6 +1103,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	GetFunctionByName("draw_set_color", drawSetColorFunc);
 	GetFunctionByName("draw_text", drawTextFunc);
 	GetFunctionByName("draw_sprite", drawSpriteFunc);
+	GetFunctionByName("draw_sprite_ext", drawSpriteExtFunc);
 	GetFunctionByName("audio_play_sound", audioPlaySoundFunc);
 	GetFunctionByName("device_mouse_x_to_gui", deviceMouseXToGUIFunc);
 	GetFunctionByName("device_mouse_y_to_gui", deviceMouseYToGUIFunc);
@@ -1058,6 +1192,9 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 			}
 				 
 			mod.config = config;
+			mod.hasConfig = true;
+		} else {
+			mod.hasConfig = false;
 		}
 	}
 
