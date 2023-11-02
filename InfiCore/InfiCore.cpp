@@ -11,6 +11,7 @@
 #include <filesystem>
 #include "Utils/MH/MinHook.h"
 #include "Features/API/Internal.hpp"
+#include "Features/PluginManager/PluginManager.hpp"
 using json = nlohmann::json;
 
 static struct Version {
@@ -76,6 +77,8 @@ static struct RemoteConfig {
 static struct RemoteMod {
 	std::string name;
 	bool enabled = false;
+	bool wasToggled = false;
+	void* address;
 	RemoteConfig config;
 	bool hasConfig = false;
 };
@@ -97,7 +100,14 @@ std::string formatString(const std::string& input) {
 }
 
 void GenerateConfig(std::string fileName) {
-	json data = config;
+	json data;
+	
+	for (const Setting& setting : config.settings) {
+		json settingData;
+		settingData["icon"] = setting.icon;
+		if (setting.type == SETTING_BOOL) settingData["value"] = setting.boolValue;
+		data[setting.name.c_str()] = settingData;
+	}
 
 	std::ofstream configFile("modconfigs/" + fileName);
 	if (configFile.is_open()) {
@@ -407,6 +417,123 @@ static std::vector<RemoteMod> mods;
 static int currentMod = 0;
 static int currentModSetting = 0;
 
+static void LoadUnloadMods() {
+	for (RemoteMod& mod : mods) {
+		if (mod.wasToggled != true) continue;
+
+		std::string modPath = "autoexec\\" + mod.name;
+		mod.address = nullptr;
+
+		if (mod.enabled == true) {	// load mod
+			YYTKStatus status = PmLoadPlugin(modPath.c_str(), mod.address);
+			if (status == YYTK_OK) {
+				PrintMessage(CLR_MATRIXGREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name, mod.address);
+			} else {
+				PrintError(__FILE__, __LINE__, "Failed to load '%s'!", mod.name);
+			}
+		} else {					// unload mod
+			YYTKStatus status = PmUnloadPlugin(mod.address);
+			if (status == YYTK_OK) {
+				PrintMessage(CLR_RED, "[-] Unloaded '%s' - mapped to 0x%p.", mod.name, mod.address);
+			} else {
+				PrintError(__FILE__, __LINE__, "Failed to unload '%s' at 0x%p!", mod.name, mod.address);
+			}
+		}
+	}
+}
+
+static void GetMods() {
+	// Find Mods
+	std::string enabledModPath = "autoexec";
+	for (const auto& entry : std::filesystem::directory_iterator(enabledModPath)) {
+		std::string modName = entry.path().filename().string();
+		RemoteMod newMod;
+		newMod.name = modName;
+		newMod.enabled = true;
+		int i = 0;
+		// Find Mod in PluginStorage
+		for (const PluginAttributes_t& modAttributes : API::PluginManager::g_PluginStorage) {
+			std::cout << i << std::endl;
+			i++;
+			WCHAR modulePath[MAX_PATH];
+			DWORD modulePathLength = GetModuleFileName(static_cast<HMODULE>(modAttributes.GetPluginObject().PluginStart), modulePath, MAX_PATH);
+
+			if (modulePathLength > 0) {
+				std::cout << "modulePathLength > 0" << std::endl;
+				std::wstring modulePathStr(modulePath);
+				std::string modulePathUtf8(modulePathStr.begin(), modulePathStr.end());
+
+				if (modulePathUtf8.find(modName) != std::string::npos) {
+					std::cout << "Plugin base address: " << modAttributes.GetPluginObject().PluginStart << std::endl;
+					newMod.address = modAttributes.GetPluginObject().PluginStart;
+				} else {
+					std::cout << "Mod '" << modName << "' not found!" << std::endl;
+				}
+			}
+		}
+
+		mods.push_back(newMod);
+	}
+	std::string disabledModPath = "disabledmods";
+	for (const auto& entry : std::filesystem::directory_iterator(disabledModPath)) {
+		std::string modName = entry.path().filename().string();
+		RemoteMod newMod;
+		newMod.name = modName;
+		newMod.enabled = false;
+		mods.push_back(newMod);
+	}
+
+	// Sort Mods Alphabetically
+	std::sort(mods.begin(), mods.end(), [](const RemoteMod& a, const RemoteMod& b) {
+		return a.name < b.name;
+	});
+}
+
+static void GetModConfigs() {
+	// Get Configs for Mods
+	for (RemoteMod& mod : mods) {
+		std::string configName = mod.name.substr(0, mod.name.size() - 4) + "-config.json";
+		std::filesystem::path configPath = "modconfigs/" + configName;
+
+		if (std::filesystem::exists(configPath)) {
+			RemoteConfig config;
+			config.name = configName;
+
+			std::ifstream file(configPath);
+			json data;
+			file >> data;
+
+			for (json::iterator it = data.begin(); it != data.end(); ++it) {
+				std::string key = it.key();
+				json setting = it.value();
+				if (setting.find("value") != setting.end() && setting["value"].is_boolean()) {
+					int iconIndex = -1;
+					if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
+					Setting newSetting(key, iconIndex, setting["value"]);
+					config.settings.insert(config.settings.begin(), newSetting);
+				}
+			}
+
+			// Move "enabled" Setting to Front
+
+			auto it = std::find_if(config.settings.begin(), config.settings.end(), [](const Setting& setting) {
+				return setting.name == "enabled";
+				});
+
+			if (it != config.settings.end()) {
+				Setting enabledSetting = *it;
+				config.settings.erase(it);
+				config.settings.insert(config.settings.begin(), enabledSetting);
+			}
+
+			mod.config = config;
+			mod.hasConfig = true;
+		} else {
+			mod.hasConfig = false;
+		}
+	}
+}
+
 static void SetConfigSettings() {
 	for (int mod = 0; mod < mods.size(); mod++) {
 		std::ifstream inFile("modconfigs/" + mods[mod].config.name);
@@ -452,6 +579,7 @@ YYRValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYRV
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
 		} else if (configHovered == false) {
 			mods[currentMod].enabled = !mods[currentMod].enabled;
+			mods[currentMod].wasToggled = !mods[currentMod].wasToggled;
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_confirm");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
 		} else if (configSelected == false) {
@@ -502,6 +630,7 @@ YYRValue* ReturnMenuTitleScreenFuncDetour(CInstance* Self, CInstance* Other, YYR
 			args_audioPlaySound.args[0].I64 = getAssetIndexFromName("snd_menu_back");
 			audioPlaySoundFunc(&result, Self, Other, 3, args_audioPlaySound.args);
 			SetConfigSettings();
+			LoadUnloadMods();
 		}
 	} else {
 		YYRValue* res = origReturnMenuTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
@@ -667,6 +796,8 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 		codeIndexToName[Code->i_CodeIndex] = Code->i_pName;
 		if (_strcmpi(Code->i_pName, "gml_Object_obj_TitleScreen_Create_0") == 0) {
 			auto TitleScreen_Create_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
+				GetMods();
+				GetModConfigs();
 				if (args_version.isInitialized == false) args_version = ArgSetup("version");
 				if (versionTextChanged == false) {
 					YYRValue yyrv_version;
@@ -1131,72 +1262,6 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	int commandPrompsIndex = getAssetIndexFromName("gml_Script_commandPromps") - 100000;
 	CScript* commandPrompsCScript = scriptList(commandPrompsIndex);
 	commandPrompsScript = commandPrompsCScript->s_pFunc->pScriptFunc;
-
-	// Find Mods
-	std::string enabledModPath = "autoexec";
-	for (const auto& entry : std::filesystem::directory_iterator(enabledModPath)) {
-		std::string modName = entry.path().filename().string();
-		RemoteMod newMod;
-		newMod.name = modName;
-		newMod.enabled = true;
-		mods.push_back(newMod);
-	}
-	std::string disabledModPath = "disabledmods";
-	for (const auto& entry : std::filesystem::directory_iterator(disabledModPath)) {
-		std::string modName = entry.path().filename().string();
-		RemoteMod newMod;
-		newMod.name = modName;
-		newMod.enabled = false;
-		mods.push_back(newMod);
-	}
-	
-	// Sort Mods Alphabetically
-	std::sort(mods.begin(), mods.end(), [](const RemoteMod& a, const RemoteMod& b) {
-		return a.name < b.name;
-	});
-
-	// Get Configs for Mods
-	for (RemoteMod& mod : mods) {
-		std::string configName = mod.name.substr(0, mod.name.size() - 4) + "-config.json";
-		std::filesystem::path configPath = "modconfigs/" + configName;
-
-		if (std::filesystem::exists(configPath)) {
-			RemoteConfig config;
-			config.name = configName;
-
-			std::ifstream file(configPath);
-			json data;
-			file >> data;
-
-			for (json::iterator it = data.begin(); it != data.end(); ++it) {
-				std::string key = it.key();
-				json setting = it.value();
-				if (setting.find("value") != setting.end() && setting["value"].is_boolean()) {
-					int iconIndex = -1;
-					if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
-					Setting newSetting(key, iconIndex, setting["value"]);
-					config.settings.insert(config.settings.begin(), newSetting);
-				}
-			}
-
-			// Move "enabled" Setting to Front
-
-			auto it = std::find_if(config.settings.begin(), config.settings.end(), [](const Setting& setting) {
-				return setting.name == "enabled";
-			});
-
-			if (it != config.settings.end()) {
-				Setting enabledSetting = *it;
-				config.settings.erase(it);
-				config.settings.insert(config.settings.begin(), enabledSetting);
-			}
-				 
-			mod.config = config;
-			mod.hasConfig = true;
-		} else {
-			mod.hasConfig = false;
-		}
-	}
 
 	// Off it goes to the core.
 	return YYTK_OK;
