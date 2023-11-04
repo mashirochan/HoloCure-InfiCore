@@ -239,7 +239,8 @@ YYTKStatus PmCreateCallbackEx(
 	IN EventType EventTypes,
 	OPTIONAL IN PVOID Context,
 	OUT CallbackAttributes_t*& CallbackAttributes
-) {
+)
+{
 	HMODULE YYTKModule = GetYYTKModule();
 
 	decltype(&PmCreateCallbackEx) Func = reinterpret_cast<decltype(&PmCreateCallbackEx)>(GetProcAddress(YYTKModule, __FUNCTION__));
@@ -251,5 +252,18 @@ YYTKStatus PmCreateCallbackEx(
 		EventTypes,
 		Context,
 		CallbackAttributes
+	);
+}
+
+void PmGetPluginStorage(
+	OUT std::list<PluginAttributes_t>*& List
+)
+{
+	HMODULE YYTKModule = GetYYTKModule();
+
+	decltype(&PmGetPluginStorage) Func = reinterpret_cast<decltype(&PmGetPluginStorage)>(GetProcAddress(YYTKModule, __FUNCTION__));
+
+	return Func(
+		List
 	);
 }

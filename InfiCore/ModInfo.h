@@ -1,7 +1,7 @@
 #pragma once
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 0
-#define VERSION_BUILD 222
+#define VERSION_BUILD 234
 #define MOD_NAME "Infi Core"
 #define HAS_CONFIG true
 

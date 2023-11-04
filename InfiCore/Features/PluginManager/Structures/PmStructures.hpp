@@ -52,6 +52,12 @@ public:
 		return PluginObject;
 	}
 
+	PluginAttributes_t() {
+		PluginObject = YYTKPlugin();
+		RegisteredCallbacks = std::list<CallbackAttributes_t>();
+		Exports = std::set<ExportedRoutine_t>();
+	}
+
 	PluginAttributes_t(YYTKPlugin& pPlugin)
 	{
 		this->PluginObject = pPlugin;

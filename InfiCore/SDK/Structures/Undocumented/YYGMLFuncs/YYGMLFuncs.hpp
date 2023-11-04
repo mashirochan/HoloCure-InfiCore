@@ -4,7 +4,6 @@
 struct YYGMLFuncs
 {
 	const char* pName;
-	
 	union
 	{
 		PFUNC_YYGMLScript pScriptFunc;

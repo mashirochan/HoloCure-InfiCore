@@ -10,8 +10,7 @@
 #include "json.hpp"
 #include <filesystem>
 #include "Utils/MH/MinHook.h"
-#include "Features/API/Internal.hpp"
-#include "Features/PluginManager/PluginManager.hpp"
+#include "Features/PluginManager/Structures/PmStructures.hpp"
 using json = nlohmann::json;
 
 static struct Version {
@@ -78,9 +77,14 @@ static struct RemoteMod {
 	std::string name;
 	bool enabled = false;
 	bool wasToggled = false;
-	void* address;
+	PluginAttributes_t attributes;
 	RemoteConfig config;
 	bool hasConfig = false;
+
+	RemoteMod(std::string n, bool e) {
+		name = n;
+		enabled = e;
+	}
 };
 
 std::string formatString(const std::string& input) {
@@ -417,28 +421,45 @@ static std::vector<RemoteMod> mods;
 static int currentMod = 0;
 static int currentModSetting = 0;
 
+static PluginAttributes_t GetModAttributesFromAddress(void* modAddress) {
+	std::list<PluginAttributes_t>* pluginStorage;
+	PmGetPluginStorage(pluginStorage);
+	if (pluginStorage) {
+		for (const PluginAttributes_t& plugin : *pluginStorage) {
+			if (plugin.GetPluginObject().PluginStart == modAddress) {
+				return plugin;
+			}
+		}
+	}
+}
+
 static void LoadUnloadMods() {
 	for (RemoteMod& mod : mods) {
 		if (mod.wasToggled != true) continue;
 
-		std::string modPath = "autoexec\\" + mod.name;
-		mod.address = nullptr;
+		std::string enabledPath = "autoexec\\" + mod.name;
+		std::string disabledPath = "disabledmods\\" + mod.name;
+		void* tempAddr = nullptr;
 
 		if (mod.enabled == true) {	// load mod
-			YYTKStatus status = PmLoadPlugin(modPath.c_str(), mod.address);
+			YYTKStatus status = PmLoadPlugin(disabledPath.c_str(), tempAddr);
 			if (status == YYTK_OK) {
-				PrintMessage(CLR_MATRIXGREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name, mod.address);
+				PrintMessage(CLR_MATRIXGREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name, tempAddr);
+				mod.attributes = GetModAttributesFromAddress(tempAddr);
+				mod.attributes.GetPluginObject().PluginEntry(&mod.attributes.GetPluginObject());
 			} else {
 				PrintError(__FILE__, __LINE__, "Failed to load '%s'!", mod.name);
 			}
 		} else {					// unload mod
-			YYTKStatus status = PmUnloadPlugin(mod.address);
+			YYTKStatus status = PmUnloadPlugin(mod.attributes.GetPluginObject().PluginStart);
 			if (status == YYTK_OK) {
-				PrintMessage(CLR_RED, "[-] Unloaded '%s' - mapped to 0x%p.", mod.name, mod.address);
+				PrintMessage(CLR_RED, "[-] Unloaded '%s' - mapped to 0x%p.", mod.name, mod.attributes.GetPluginObject().PluginStart);
 			} else {
-				PrintError(__FILE__, __LINE__, "Failed to unload '%s' at 0x%p!", mod.name, mod.address);
+				PrintError(__FILE__, __LINE__, "Failed to unload '%s' at 0x%p!", mod.name, mod.attributes.GetPluginObject().PluginStart);
 			}
 		}
+
+		mod.wasToggled = false;
 	}
 }
 
@@ -447,39 +468,36 @@ static void GetMods() {
 	std::string enabledModPath = "autoexec";
 	for (const auto& entry : std::filesystem::directory_iterator(enabledModPath)) {
 		std::string modName = entry.path().filename().string();
-		RemoteMod newMod;
-		newMod.name = modName;
-		newMod.enabled = true;
-		int i = 0;
+		RemoteMod newMod(modName, true);
 		// Find Mod in PluginStorage
-		for (const PluginAttributes_t& modAttributes : API::PluginManager::g_PluginStorage) {
-			std::cout << i << std::endl;
-			i++;
-			WCHAR modulePath[MAX_PATH];
-			DWORD modulePathLength = GetModuleFileName(static_cast<HMODULE>(modAttributes.GetPluginObject().PluginStart), modulePath, MAX_PATH);
+		std::list<PluginAttributes_t>* pluginStorage = nullptr;
+		PmGetPluginStorage(pluginStorage);
+		if (pluginStorage) {
+			for (PluginAttributes_t& modAttributes : *pluginStorage) {
+				WCHAR modulePath[MAX_PATH];
+				DWORD modulePathLength = GetModuleFileName(static_cast<HMODULE>(modAttributes.GetPluginObject().PluginStart), modulePath, MAX_PATH);
+				
+				if (modulePathLength > 0) {
+					std::cout << "modulePathLength > 0" << std::endl;
+					std::wstring modulePathStr(modulePath);
+					std::string modulePathUtf8(modulePathStr.begin(), modulePathStr.end());
 
-			if (modulePathLength > 0) {
-				std::cout << "modulePathLength > 0" << std::endl;
-				std::wstring modulePathStr(modulePath);
-				std::string modulePathUtf8(modulePathStr.begin(), modulePathStr.end());
-
-				if (modulePathUtf8.find(modName) != std::string::npos) {
-					std::cout << "Plugin base address: " << modAttributes.GetPluginObject().PluginStart << std::endl;
-					newMod.address = modAttributes.GetPluginObject().PluginStart;
-				} else {
-					std::cout << "Mod '" << modName << "' not found!" << std::endl;
+					if (modulePathUtf8.find(modName) != std::string::npos) {
+						std::cout << "Plugin base address: " << modAttributes.GetPluginObject().PluginStart << std::endl;
+						newMod.attributes = modAttributes;
+					} else {
+						std::cout << "Mod '" << modName << "' not found!" << std::endl;
+					}
 				}
 			}
-		}
 
-		mods.push_back(newMod);
+			mods.push_back(newMod);
+		}
 	}
 	std::string disabledModPath = "disabledmods";
 	for (const auto& entry : std::filesystem::directory_iterator(disabledModPath)) {
 		std::string modName = entry.path().filename().string();
-		RemoteMod newMod;
-		newMod.name = modName;
-		newMod.enabled = false;
+		RemoteMod newMod(modName, false);
 		mods.push_back(newMod);
 	}
 
@@ -506,24 +524,14 @@ static void GetModConfigs() {
 			for (json::iterator it = data.begin(); it != data.end(); ++it) {
 				std::string key = it.key();
 				json setting = it.value();
-				if (setting.find("value") != setting.end() && setting["value"].is_boolean()) {
-					int iconIndex = -1;
-					if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
-					Setting newSetting(key, iconIndex, setting["value"]);
-					config.settings.insert(config.settings.begin(), newSetting);
+				if (setting.find("value") != setting.end()) {
+					if (setting["value"].is_boolean()) {
+						int iconIndex = -1;
+						if (setting.find("icon") != setting.end()) iconIndex = setting["icon"];
+						Setting newSetting(key, iconIndex, setting["value"]);
+						config.settings.insert(config.settings.begin(), newSetting);
+					}
 				}
-			}
-
-			// Move "enabled" Setting to Front
-
-			auto it = std::find_if(config.settings.begin(), config.settings.end(), [](const Setting& setting) {
-				return setting.name == "enabled";
-				});
-
-			if (it != config.settings.end()) {
-				Setting enabledSetting = *it;
-				config.settings.erase(it);
-				config.settings.insert(config.settings.begin(), enabledSetting);
 			}
 
 			mod.config = config;
@@ -827,58 +835,23 @@ YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 				if (args_drawToggleButtonSpriteExt.isInitialized == false) args_drawToggleButtonSpriteExt = ArgSetup("hud_toggleButton", 0, 320 + 160, 48, 1, 1, 0, 0, 1);
 				if (args_commandPromps.isInitialized == false) {
 					args_commandPromps = ArgSetup((double)1, (double)1, (double)1);
-					commandPrompsArgs[0] = new YYRValue;
-					commandPrompsArgs[0]->Real = 1;
-					commandPrompsArgs[0]->Kind = VALUE_REAL;
-					commandPrompsArgs[1] = new YYRValue;
-					commandPrompsArgs[1]->Real = 1;
-					commandPrompsArgs[1]->Kind = VALUE_REAL;
-					commandPrompsArgs[2] = new YYRValue;
-					commandPrompsArgs[2]->Real = 1;
-					commandPrompsArgs[2]->Kind = VALUE_REAL;
+					commandPrompsArgs[0] = new YYRValue((double)1);
+					
+					commandPrompsArgs[1] = new YYRValue((double)1);
+					commandPrompsArgs[2] = new YYRValue((double)1);
 				}
 				if (args_configHeaderDraw.isInitialized == false) {
 					args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);
-
-					drawTextOutlineArgs[0] = new YYRValue;
-					drawTextOutlineArgs[0]->Real = (double)320;
-					drawTextOutlineArgs[0]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[1] = new YYRValue;
-					drawTextOutlineArgs[1]->Real = (double)(48 + 13);
-					drawTextOutlineArgs[1]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[2] = new YYRValue;
-					drawTextOutlineArgs[2]->String = RefString::Alloc("MOD SETTINGS", strlen("MOD SETTINGS"), false);
-					drawTextOutlineArgs[2]->Kind = VALUE_STRING;
-
-					drawTextOutlineArgs[3] = new YYRValue;
-					drawTextOutlineArgs[3]->Real = (double)1;
-					drawTextOutlineArgs[3]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[4] = new YYRValue;
-					drawTextOutlineArgs[4]->Real = (double)0;
-					drawTextOutlineArgs[4]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[5] = new YYRValue;
-					drawTextOutlineArgs[5]->Real = (double)32;
-					drawTextOutlineArgs[5]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[6] = new YYRValue;
-					drawTextOutlineArgs[6]->Real = (double)4;
-					drawTextOutlineArgs[6]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[7] = new YYRValue;
-					drawTextOutlineArgs[7]->Real = (double)300;
-					drawTextOutlineArgs[7]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[8] = new YYRValue;
-					drawTextOutlineArgs[8]->Real = (double)0;
-					drawTextOutlineArgs[8]->Kind = VALUE_REAL;
-
-					drawTextOutlineArgs[9] = new YYRValue;
-					drawTextOutlineArgs[9]->Real = (double)1;
-					drawTextOutlineArgs[9]->Kind = VALUE_REAL;
+					drawTextOutlineArgs[0] = new YYRValue((double)320);
+					drawTextOutlineArgs[1] = new YYRValue((double)(48 + 13));
+					drawTextOutlineArgs[2] = new YYRValue("MOD SETTINGS");
+					drawTextOutlineArgs[3] = new YYRValue((double)1);
+					drawTextOutlineArgs[4] = new YYRValue((double)0);
+					drawTextOutlineArgs[5] = new YYRValue((double)32);
+					drawTextOutlineArgs[6] = new YYRValue((double)4);
+					drawTextOutlineArgs[7] = new YYRValue((double)300);
+					drawTextOutlineArgs[8] = new YYRValue((double)0);
+					drawTextOutlineArgs[9] = new YYRValue((double)1);
 				}
 
 				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);

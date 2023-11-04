@@ -89,7 +89,7 @@ struct CInstance : YYObjectBase
 	float i_gravity;
 	float i_hspeed;
 	float i_vspeed;
-	float f_bbox[4];
+	int i_bbox[4];
 	int i_timer[12];
 	void* m_pPathAndTimeline;
 	CCode* i_initcode;
