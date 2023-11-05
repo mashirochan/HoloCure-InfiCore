@@ -442,18 +442,34 @@ static void LoadUnloadMods() {
 		void* tempAddr = nullptr;
 
 		if (mod.enabled == true) {	// load mod
-			YYTKStatus status = PmLoadPlugin(disabledPath.c_str(), tempAddr);
-			if (status == YYTK_OK) {
-				PrintMessage(CLR_MATRIXGREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name, tempAddr);
-				mod.attributes = GetModAttributesFromAddress(tempAddr);
-				mod.attributes.GetPluginObject().PluginEntry(&mod.attributes.GetPluginObject());
+			std::error_code ec;
+			std::filesystem::rename(disabledPath, enabledPath, ec);
+			if (ec.value() == 0) {
+				PrintMessage(CLR_GOLD, "[*] Moved '%s' to '%s'!", mod.name, enabledPath.c_str());
+				YYTKStatus status = PmLoadPlugin(enabledPath.c_str(), tempAddr);
+				if (status == YYTK_OK) {
+					PrintMessage(CLR_MATRIXGREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name, tempAddr);
+					mod.attributes = GetModAttributesFromAddress(tempAddr);
+					mod.attributes.GetPluginObject().PluginEntry(&mod.attributes.GetPluginObject());
+				} else {
+					PrintError(__FILE__, __LINE__, "Failed to load '%s'!", mod.name);
+				}
 			} else {
-				PrintError(__FILE__, __LINE__, "Failed to load '%s'!", mod.name);
+				PrintError(__FILE__, __LINE__, "Failed to move '%s' to '%s'", mod.name, enabledPath.c_str());
 			}
 		} else {					// unload mod
+			std::cout << "PluginStart = " << mod.attributes.GetPluginObject().PluginStart << std::endl;
 			YYTKStatus status = PmUnloadPlugin(mod.attributes.GetPluginObject().PluginStart);
+			std::cout << "PmUnloadPlugin completed!" << std::endl;
 			if (status == YYTK_OK) {
 				PrintMessage(CLR_RED, "[-] Unloaded '%s' - mapped to 0x%p.", mod.name, mod.attributes.GetPluginObject().PluginStart);
+				std::error_code ec;
+				std::filesystem::rename(enabledPath, disabledPath, ec);
+				if (ec.value() == 0) {
+					PrintMessage(CLR_GOLD, "[*] Moved '%s' to '%s'!", mod.name, disabledPath.c_str());
+				} else {
+					PrintError(__FILE__, __LINE__, "Failed to move '%s' to '%s'", mod.name, disabledPath.c_str());
+				}
 			} else {
 				PrintError(__FILE__, __LINE__, "Failed to unload '%s' at 0x%p!", mod.name, mod.attributes.GetPluginObject().PluginStart);
 			}
@@ -473,25 +489,28 @@ static void GetMods() {
 		std::list<PluginAttributes_t>* pluginStorage = nullptr;
 		PmGetPluginStorage(pluginStorage);
 		if (pluginStorage) {
+			bool foundMod = false;
 			for (PluginAttributes_t& modAttributes : *pluginStorage) {
 				WCHAR modulePath[MAX_PATH];
 				DWORD modulePathLength = GetModuleFileName(static_cast<HMODULE>(modAttributes.GetPluginObject().PluginStart), modulePath, MAX_PATH);
 				
 				if (modulePathLength > 0) {
-					std::cout << "modulePathLength > 0" << std::endl;
 					std::wstring modulePathStr(modulePath);
 					std::string modulePathUtf8(modulePathStr.begin(), modulePathStr.end());
 
+					// if mod is found
 					if (modulePathUtf8.find(modName) != std::string::npos) {
-						std::cout << "Plugin base address: " << modAttributes.GetPluginObject().PluginStart << std::endl;
+						std::cout << "Mod '" << modName << "' base address: " << modAttributes.GetPluginObject().PluginStart << std::endl;
 						newMod.attributes = modAttributes;
-					} else {
-						std::cout << "Mod '" << modName << "' not found!" << std::endl;
+						foundMod = true;
 					}
 				}
 			}
-
-			mods.push_back(newMod);
+			if (foundMod == false) {
+				std::cout << "Mod '" << modName << "' not found!" << std::endl;
+			} else {
+				mods.push_back(newMod);
+			}
 		}
 	}
 	std::string disabledModPath = "disabledmods";
@@ -1243,6 +1262,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 // The routine that gets called on plugin unload.
 // Registered in PluginEntry - you should use this to release resources.
 YYTKStatus PluginUnload() {
+	std::cout << "PluginUnload called!" << std::endl;
 	YYTKStatus Removal = PmRemoveCallback(g_pFrameCallbackAttributes);
 
 	// If we didn't succeed in removing the callback.
