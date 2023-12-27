@@ -8,17 +8,6 @@ using namespace YYTK;
 
 static YYTKInterface* g_ModuleInterface = nullptr;
 
-static struct Version {
-	int major = VERSION_MAJOR;
-	int minor = VERSION_MINOR;
-	int build = VERSION_BUILD;
-} version;
-
-static struct Mod {
-	Version version;
-	const char* name = MOD_NAME;
-} mod;
-
 // Config variables
 static enum SettingType {
 	SETTING_BOOL = 0
@@ -44,7 +33,6 @@ static struct ModConfig {
 } config;
 
 void to_json(json& j, const ModConfig& c) {
-	j = json {
 		"debugEnabled", {
 			{ "icon", c.debugEnabled.icon },
 			{ "value", c.debugEnabled.boolValue }
@@ -62,7 +50,6 @@ void from_json(const json& j, ModConfig& c) {
 		GenerateConfig(fileName);
 	}
 }
-
 static struct RemoteConfig {
 	std::string name;
 	std::vector<Setting> settings;
@@ -110,12 +97,29 @@ void GenerateConfig(std::string fileName) {
 
 	std::ofstream configFile("modconfigs/" + fileName);
 	if (configFile.is_open()) {
-		PrintMessage(CLR_DEFAULT, "[%s v%d.%d.%d] - Config file \"%s\" created!", mod.name, mod.version.major, mod.version.minor, mod.version.build, fileName.c_str());
+		PrintMessage(CLR_DEFAULT, "[InfiCore] - Config file \"%s\" created!", fileName.c_str());
 		configFile << std::setw(4) << data << std::endl;
 		configFile.close();
 	} else {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - Error opening config file \"%s\"", mod.name, mod.version.major, mod.version.minor, mod.version.build, fileName.c_str());
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Error opening config file \"%s\"", fileName.c_str());
 	}
+}
+
+/*
+		Inline Functions
+*/
+template <typename... TArgs>
+inline static void Print(CmColor Color, std::string_view Format, TArgs&&... Args) {
+	g_ModuleInterface->Print(Color, Format, Args...);
+}
+
+template <typename... TArgs>
+inline static void PrintError(std::string_view Filepath, int Line, std::string_view Format, TArgs&&... Args) {
+	g_ModuleInterface->PrintError(Filepath, Line, Format, Args...);
+}
+
+inline static RValue CallBuiltin(const char* FunctionName, std::vector<RValue> Arguments) {
+	return g_ModuleInterface->CallBuiltin(FunctionName, Arguments);
 }
 
 // Function Hooks
@@ -795,341 +799,399 @@ YYTKStatus FrameCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
 	return YYTK_OK;
 }
 
-// This callback is registered on EVT_CODE_EXECUTE, so it gets called every game function call.
-YYTKStatus CodeCallback(YYTKEventBase* pEvent, void* OptionalArgument) {
-	YYTKCodeEvent* pCodeEvent = dynamic_cast<decltype(pCodeEvent)>(pEvent);
+/*
+		Frame Callback Event
+*/
+static AurieStatus FrameCallback(
+	IN FWFrame& FrameContext
+) {
+	UNREFERENCED_PARAMETER(FrameContext);
 
-	std::tuple<CInstance*, CInstance*, CCode*, RValue*, int> args = pCodeEvent->Arguments();
+	FrameNumber++;
+	if (noConfigErrorTimer > 0) {
+		noConfigErrorTimer--;
+	} else if (noConfigError == true) {
+		noConfigError = false;
+	}
+	// Tell the core the handler was successful.
+	return AURIE_SUCCESS;
+}
 
-	CInstance* Self = std::get<0>(args);
-	CInstance* Other = std::get<1>(args);
-	CCode* Code = std::get<2>(args);
-	RValue* Res = std::get<3>(args);
-	int	Flags = std::get<4>(args);
+/*
+		Code Callback Events
+*/
+static AurieStatus CodeCallback(
+	IN FWCodeEvent& CodeContext
+)
+{
+	CInstance* Self = std::get<0>(CodeContext.Arguments());
+	CInstance* Other = std::get<1>(CodeContext.Arguments());
+	CCode* Code = std::get<2>(CodeContext.Arguments());
+	int	Flags = std::get<3>(CodeContext.Arguments());
+	RValue* Res = std::get<4>(CodeContext.Arguments());
 
-	if (!Code->i_pName) {
-		return YYTK_INVALIDARG;
+	// Check if CCode argument has a valid name
+	if (!Code->GetName()) {
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Failed to find Code Event name!");
+		return AURIE_MODULE_INTERNAL_ERROR;
 	}
 
-	if (codeFuncTable.count(Code->i_CodeIndex) != 0) {
-		codeFuncTable[Code->i_CodeIndex](pCodeEvent, Self, Other, Code, Res, Flags);
-	} else // Haven't cached the function in the table yet. Run the if statements and assign the function to the code index
-	{
-		codeIndexToName[Code->i_CodeIndex] = Code->i_pName;
-		if (_strcmpi(Code->i_pName, "gml_Object_obj_TitleScreen_Create_0") == 0) {
-			auto TitleScreen_Create_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
-				GetMods();
-				GetModConfigs();
-				if (args_version.isInitialized == false) args_version = ArgSetup("version");
-				if (versionTextChanged == false) {
-					YYRValue yyrv_version;
-					variableGlobalGetFunc(&yyrv_version, Self, Other, 1, args_version.args);
-					if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : version", GetFileName(__FILE__).c_str(), __LINE__);
-					if (yyrv_version.operator std::string().find("Modded") == std::string::npos) {
-						std::string moddedVerStr = yyrv_version.operator std::string() + " (Modded)";
-						CallBuiltin(yyrv_version, "variable_global_set", Self, Other, { "version", moddedVerStr.c_str() });
-						if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : version", GetFileName(__FILE__).c_str(), __LINE__);
-					}
-					versionTextChanged = true;
-				}
+	// Cast Name arg to an std::string for easy usage
+	std::string Name = Code->GetName();
+
+	/*
+			Title Screen Create Event
+	*/
+	if (Name == "gml_Object_obj_TitleScreen_Create_0") {
+		GetMods();
+		GetModConfigs();
+		if (args_version.isInitialized == false) args_version = ArgSetup("version");
+		if (versionTextChanged == false) {
+			YYRValue yyrv_version;
+			variableGlobalGetFunc(&yyrv_version, Self, Other, 1, args_version.args);
+			if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : version", GetFileName(__FILE__).c_str(), __LINE__);
+			if (yyrv_version.operator std::string().find("Modded") == std::string::npos) {
+				std::string moddedVerStr = yyrv_version.operator std::string() + " (Modded)";
+				CallBuiltin(yyrv_version, "variable_global_set", Self, Other, { "version", moddedVerStr.c_str() });
+				if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : version", GetFileName(__FILE__).c_str(), __LINE__);
+			}
+			versionTextChanged = true;
+		}
 				
-				if (args_currentOption.isInitialized == false) args_currentOption = ArgSetup(Self->i_id, "currentOption");
-				if (args_canControl.isInitialized == false) args_canControl = ArgSetup(Self->i_id, "canControl");
-				if (args_lastTitleOption.isInitialized == false) args_lastTitleOption = ArgSetup("lastTitleOption");
-				if (args_drawSettingsSprite.isInitialized == false) args_drawSettingsSprite = ArgSetup("hud_optionsmenu", 0, 320, 48);
-				if (args_drawOptionButtonSprite.isInitialized == false) args_drawOptionButtonSprite = ArgSetup("hud_OptionButton", 0, 320, 96);
-				if (args_drawConfigNameText.isInitialized == false) args_drawConfigNameText = ArgSetup(320, 96, "text");
-				if (args_halign.isInitialized == false) args_halign = ArgSetup(double(1));
-				if (args_valign.isInitialized == false) args_valign = ArgSetup(double(1));
-				if (args_drawSetFont.isInitialized == false) args_drawSetFont = ArgSetup((double)getAssetIndexFromName("jpFont_Big"));
-				if (args_drawOptionIconSprite.isInitialized == false) args_drawOptionIconSprite = ArgSetup("hud_graphicIcons", 0, 320, 48);
-				if (args_drawToggleButtonSprite.isInitialized == false) args_drawToggleButtonSprite = ArgSetup("hud_toggleButton", 0, 320, 48);
-				if (args_audioPlaySound.isInitialized == false) args_audioPlaySound = ArgSetup("snd_menu_confirm", 30, false);
-				if (args_drawShopButtonSpriteExt.isInitialized == false) args_drawShopButtonSpriteExt = ArgSetup("hud_shopButton", 1, 320 + 160, 48, 0.75, 0.75, 0, 16777215, 1);
-				if (args_drawToggleButtonSpriteExt.isInitialized == false) args_drawToggleButtonSpriteExt = ArgSetup("hud_toggleButton", 0, 320 + 160, 48, 1, 1, 0, 0, 1);
-				if (args_commandPromps.isInitialized == false) {
-					args_commandPromps = ArgSetup((double)1, (double)1, (double)1);
-					commandPrompsArgs[0] = new YYRValue((double)1);
+		if (args_currentOption.isInitialized == false) args_currentOption = ArgSetup(Self->i_id, "currentOption");
+		if (args_canControl.isInitialized == false) args_canControl = ArgSetup(Self->i_id, "canControl");
+		if (args_lastTitleOption.isInitialized == false) args_lastTitleOption = ArgSetup("lastTitleOption");
+		if (args_drawSettingsSprite.isInitialized == false) args_drawSettingsSprite = ArgSetup("hud_optionsmenu", 0, 320, 48);
+		if (args_drawOptionButtonSprite.isInitialized == false) args_drawOptionButtonSprite = ArgSetup("hud_OptionButton", 0, 320, 96);
+		if (args_drawConfigNameText.isInitialized == false) args_drawConfigNameText = ArgSetup(320, 96, "text");
+		if (args_halign.isInitialized == false) args_halign = ArgSetup(double(1));
+		if (args_valign.isInitialized == false) args_valign = ArgSetup(double(1));
+		if (args_drawSetFont.isInitialized == false) args_drawSetFont = ArgSetup((double)getAssetIndexFromName("jpFont_Big"));
+		if (args_drawOptionIconSprite.isInitialized == false) args_drawOptionIconSprite = ArgSetup("hud_graphicIcons", 0, 320, 48);
+		if (args_drawToggleButtonSprite.isInitialized == false) args_drawToggleButtonSprite = ArgSetup("hud_toggleButton", 0, 320, 48);
+		if (args_audioPlaySound.isInitialized == false) args_audioPlaySound = ArgSetup("snd_menu_confirm", 30, false);
+		if (args_drawShopButtonSpriteExt.isInitialized == false) args_drawShopButtonSpriteExt = ArgSetup("hud_shopButton", 1, 320 + 160, 48, 0.75, 0.75, 0, 16777215, 1);
+		if (args_drawToggleButtonSpriteExt.isInitialized == false) args_drawToggleButtonSpriteExt = ArgSetup("hud_toggleButton", 0, 320 + 160, 48, 1, 1, 0, 0, 1);
+		if (args_commandPromps.isInitialized == false) {
+			args_commandPromps = ArgSetup((double)1, (double)1, (double)1);
+			commandPrompsArgs[0] = new YYRValue((double)1);
 					
-					commandPrompsArgs[1] = new YYRValue((double)1);
-					commandPrompsArgs[2] = new YYRValue((double)1);
-				}
-				if (args_configHeaderDraw.isInitialized == false) {
-					args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);
-					drawTextOutlineArgs[0] = new YYRValue((double)320);
-					drawTextOutlineArgs[1] = new YYRValue((double)(48 + 13));
-					drawTextOutlineArgs[2] = new YYRValue("MOD SETTINGS");
-					drawTextOutlineArgs[3] = new YYRValue((double)1);
-					drawTextOutlineArgs[4] = new YYRValue((double)0);
-					drawTextOutlineArgs[5] = new YYRValue((double)32);
-					drawTextOutlineArgs[6] = new YYRValue((double)4);
-					drawTextOutlineArgs[7] = new YYRValue((double)300);
-					drawTextOutlineArgs[8] = new YYRValue((double)0);
-					drawTextOutlineArgs[9] = new YYRValue((double)1);
-				}
+			commandPrompsArgs[1] = new YYRValue((double)1);
+			commandPrompsArgs[2] = new YYRValue((double)1);
+		}
+		if (args_configHeaderDraw.isInitialized == false) {
+			args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);
+			drawTextOutlineArgs[0] = new YYRValue((double)320);
+			drawTextOutlineArgs[1] = new YYRValue((double)(48 + 13));
+			drawTextOutlineArgs[2] = new YYRValue("MOD SETTINGS");
+			drawTextOutlineArgs[3] = new YYRValue((double)1);
+			drawTextOutlineArgs[4] = new YYRValue((double)0);
+			drawTextOutlineArgs[5] = new YYRValue((double)32);
+			drawTextOutlineArgs[6] = new YYRValue((double)4);
+			drawTextOutlineArgs[7] = new YYRValue((double)300);
+			drawTextOutlineArgs[8] = new YYRValue((double)0);
+			drawTextOutlineArgs[9] = new YYRValue((double)1);
+		}
 
-				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
-			};
-			TitleScreen_Create_0(pCodeEvent, Self, Other, Code, Res, Flags);
-			codeFuncTable[Code->i_CodeIndex] = TitleScreen_Create_0;
-		} else if (_strcmpi(Code->i_pName, "gml_Object_obj_TextController_Create_0") == 0) {
-			auto TextController_Create_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
-				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
-				YYRValue yyrv_textContainer;
-				if (args_textContainer.isInitialized == false) args_textContainer = ArgSetup("TextContainer");
-				variableGlobalGetFunc(&yyrv_textContainer, Self, Other, 1, args_textContainer.args);
-				if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : TextContainer", GetFileName(__FILE__).c_str(), __LINE__);
-				YYRValue yyrv_titleButtons;
-				CallBuiltin(yyrv_titleButtons, "struct_get", Self, Other, { yyrv_textContainer, "titleButtons" });
-				if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : titleButtons", GetFileName(__FILE__).c_str(), __LINE__);
-				YYRValue yyrv_eng;
-				CallBuiltin(yyrv_eng, "struct_get", Self, Other, { yyrv_titleButtons, "eng" });
-				if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : eng", GetFileName(__FILE__).c_str(), __LINE__);
-				if (std::string(yyrv_eng.RefArray->m_Array[0].String->Get()).find("Modded") == std::string::npos) {
-					yyrv_eng.RefArray->m_Array[0].String = &moddedRefStr;
-					if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[0]", GetFileName(__FILE__).c_str(), __LINE__);
-				}
-				if (std::string(yyrv_eng.RefArray->m_Array[3].String->Get()).find("Mod Configs") == std::string::npos) {
-					yyrv_eng.RefArray->m_Array[3].String = &configRefStr;
-					if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[3]", GetFileName(__FILE__).c_str(), __LINE__);
-				}
-			};
-			TextController_Create_0(pCodeEvent, Self, Other, Code, Res, Flags);
-			codeFuncTable[Code->i_CodeIndex] = TextController_Create_0;
-		} else if (_strcmpi(Code->i_pName, "gml_Object_obj_TitleScreen_Draw_0") == 0) {
-			auto TitleScreen_Draw_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
-				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
+		CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
+	}
+	/*
+			Text Controller Create Event
+	*/
+	else if (Name == "gml_Object_obj_TextController_Create_0") {
+		CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
+		YYRValue yyrv_textContainer;
+		if (args_textContainer.isInitialized == false) args_textContainer = ArgSetup("TextContainer");
+		variableGlobalGetFunc(&yyrv_textContainer, Self, Other, 1, args_textContainer.args);
+		if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] variable_global_get : TextContainer", GetFileName(__FILE__).c_str(), __LINE__);
+		YYRValue yyrv_titleButtons;
+		CallBuiltin(yyrv_titleButtons, "struct_get", Self, Other, { yyrv_textContainer, "titleButtons" });
+		if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : titleButtons", GetFileName(__FILE__).c_str(), __LINE__);
+		YYRValue yyrv_eng;
+		CallBuiltin(yyrv_eng, "struct_get", Self, Other, { yyrv_titleButtons, "eng" });
+		if (config.debugEnabled.boolValue) PrintMessage(CLR_AQUA, "[%s:%d] struct_get : eng", GetFileName(__FILE__).c_str(), __LINE__);
+		if (std::string(yyrv_eng.RefArray->m_Array[0].String->Get()).find("Modded") == std::string::npos) {
+			yyrv_eng.RefArray->m_Array[0].String = &moddedRefStr;
+			if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[0]", GetFileName(__FILE__).c_str(), __LINE__);
+		}
+		if (std::string(yyrv_eng.RefArray->m_Array[3].String->Get()).find("Mod Configs") == std::string::npos) {
+			yyrv_eng.RefArray->m_Array[3].String = &configRefStr;
+			if (config.debugEnabled.boolValue) PrintMessage(CLR_TANGERINE, "[%s:%d] variable_global_set : eng[3]", GetFileName(__FILE__).c_str(), __LINE__);
+		}
+	}
+	/*
+			Title Screen Draw Event
+	*/
+	else if (Name == "gml_Object_obj_TitleScreen_Draw_0") {
+		CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
 				
-				if (drawConfigMenu == true) {
+		if (drawConfigMenu == true) {
 
-					// Draw Mod Config Menu Background
+			// Draw Mod Config Menu Background
 
-					drawSpriteFunc(&result, Self, Other, 4, args_drawSettingsSprite.args);
+			drawSpriteFunc(&result, Self, Other, 4, args_drawSettingsSprite.args);
 
-					// Draw Controls Text
+			// Draw Controls Text
 										
-					commandPrompsScript(Self, Other, &result, 3, commandPrompsArgs);
+			commandPrompsScript(Self, Other, &result, 3, commandPrompsArgs);
 
-					if (configSelected == false) {
-						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont_Big");
-						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+			if (configSelected == false) {
+				args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont_Big");
+				drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+
+				args_halign.args[0].Real = (double)1;
+				drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+				// Draw Mod Settings Menu Title
+
+				drawTextOutlineArgs[2]->String = RefString::Alloc("MOD SETTINGS", strlen("MOD SETTINGS"), false);
+				drawTextOutlineArgs[1]->Real = (double)(48 + 13);
+				drawTextOutlineArgs[8]->Real = (double)0;
+				drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+				drawTextOutlineArgs[1]->Real = (double)(48 + 10);
+				drawTextOutlineArgs[8]->Real = (double)16777215;
+				drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+				args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
+				drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+
+				args_halign.args[0].Real = (double)0;
+				drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+				for (int i = 0; i < mods.size(); i++) {
+					int y = 48 + 43 + (i * 34);
+
+					// Draw Mod Background
+
+					args_drawOptionButtonSprite.args[2].Real = 320;
+					args_drawOptionButtonSprite.args[3].Real = y;
+					args_drawOptionButtonSprite.args[1].Real = (currentMod == i && !configHovered);
+					drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
+
+					args_drawSetColor.args[0].Real = (currentMod == i && !configHovered ? 0 : 16777215);
+					drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+
+					// Draw Mod Name
+
+					args_drawConfigNameText.args[0].I64 = (long long)320 - 78;
+					args_drawConfigNameText.args[1].I64 = (long long)y + 8;
+					args_drawConfigNameText.args[2].String = RefString::Alloc(mods[i].name.c_str(), strlen(mods[i].name.c_str()), false);
+					drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
+
+					// Draw Mod Checkbox
+
+					if (configHovered == false || currentMod != i || (configHovered == true && currentMod == i)) {
+						args_drawToggleButtonSprite.args[1].Real = mods[i].enabled + (!configHovered * 2 * (currentMod == i));
+						args_drawToggleButtonSprite.args[2].Real = 320 + 69;
+						args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (i * 34);
+						drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
+					} else {
+						args_drawToggleButtonSpriteExt.args[1].Real = mods[i].enabled;
+						args_drawToggleButtonSpriteExt.args[2].Real = 320 + 69;
+						args_drawToggleButtonSpriteExt.args[3].Real = (double)48 + 56 + (i * 34);
+						drawSpriteExtFunc(&result, Self, Other, 9, args_drawToggleButtonSpriteExt.args);
+					}
+
+					// Draw Config Button
+
+					if (currentMod == i) {
+								
+						// Draw Config Button Background
+
+						if (configHovered == false) {
+							args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_shopButton");
+							args_drawOptionIconSprite.args[1].Real = 0;
+							args_drawOptionIconSprite.args[2].Real = (double)320 + 160;
+							args_drawOptionIconSprite.args[3].Real = (double)y + 14;
+							drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
+						} else {
+							args_drawShopButtonSpriteExt.args[3].Real = (double)y + 14;
+							drawSpriteExtFunc(&result, Self, Other, 9, args_drawShopButtonSpriteExt.args);
+						}
+
+						// Draw Left/Right Arrow
+								
+						args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_scrollArrows2");
+						args_drawOptionIconSprite.args[1].Real = !configHovered;
+						args_drawOptionIconSprite.args[2].Real = (double)320 + 104;
+						args_drawOptionIconSprite.args[3].Real = (double)y + 14;
+						drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
 
 						args_halign.args[0].Real = (double)1;
 						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+						args_valign.args[0].Real = (double)1;
+						drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
 
-						// Draw Mod Settings Menu Title
+						// Draw Config Text
 
-						drawTextOutlineArgs[2]->String = RefString::Alloc("MOD SETTINGS", strlen("MOD SETTINGS"), false);
-						drawTextOutlineArgs[1]->Real = (double)(48 + 13);
-						drawTextOutlineArgs[8]->Real = (double)0;
-						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
-
-						drawTextOutlineArgs[1]->Real = (double)(48 + 10);
-						drawTextOutlineArgs[8]->Real = (double)16777215;
-						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
-
-						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
-						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
-
-						args_halign.args[0].Real = (double)0;
-						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-
-						for (int i = 0; i < mods.size(); i++) {
-							int y = 48 + 43 + (i * 34);
-
-							// Draw Mod Background
-
-							args_drawOptionButtonSprite.args[2].Real = 320;
-							args_drawOptionButtonSprite.args[3].Real = y;
-							args_drawOptionButtonSprite.args[1].Real = (currentMod == i && !configHovered);
-							drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
-
-							args_drawSetColor.args[0].Real = (currentMod == i && !configHovered ? 0 : 16777215);
-							drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
-
-							// Draw Mod Name
-
-							args_drawConfigNameText.args[0].I64 = (long long)320 - 78;
-							args_drawConfigNameText.args[1].I64 = (long long)y + 8;
-							args_drawConfigNameText.args[2].String = RefString::Alloc(mods[i].name.c_str(), strlen(mods[i].name.c_str()), false);
-							drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
-
-							// Draw Mod Checkbox
-
-							if (configHovered == false || currentMod != i || (configHovered == true && currentMod == i)) {
-								args_drawToggleButtonSprite.args[1].Real = mods[i].enabled + (!configHovered * 2 * (currentMod == i));
-								args_drawToggleButtonSprite.args[2].Real = 320 + 69;
-								args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (i * 34);
-								drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
+						args_drawConfigNameText.args[1].I64 = (long long)y + 16;
+						if (mods[currentMod].hasConfig == false) {
+							if (noConfigError == true) {
+								std::string errorStr = (noConfigErrorTimer % 10 < 5 ? "" : "NO CONFIG");
+								args_drawConfigNameText.args[2].String = RefString::Alloc(errorStr.c_str(), strlen(errorStr.c_str()), false);
 							} else {
-								args_drawToggleButtonSpriteExt.args[1].Real = mods[i].enabled;
-								args_drawToggleButtonSpriteExt.args[2].Real = 320 + 69;
-								args_drawToggleButtonSpriteExt.args[3].Real = (double)48 + 56 + (i * 34);
-								drawSpriteExtFunc(&result, Self, Other, 9, args_drawToggleButtonSpriteExt.args);
+								args_drawConfigNameText.args[2].String = RefString::Alloc("NO CONFIG", strlen("NO CONFIG"), false);
 							}
-
-							// Draw Config Button
-
-							if (currentMod == i) {
-								
-								// Draw Config Button Background
-
-								if (configHovered == false) {
-									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_shopButton");
-									args_drawOptionIconSprite.args[1].Real = 0;
-									args_drawOptionIconSprite.args[2].Real = (double)320 + 160;
-									args_drawOptionIconSprite.args[3].Real = (double)y + 14;
-									drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
-								} else {
-									args_drawShopButtonSpriteExt.args[3].Real = (double)y + 14;
-									drawSpriteExtFunc(&result, Self, Other, 9, args_drawShopButtonSpriteExt.args);
-								}
-
-								// Draw Left/Right Arrow
-								
-								args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_scrollArrows2");
-								args_drawOptionIconSprite.args[1].Real = !configHovered;
-								args_drawOptionIconSprite.args[2].Real = (double)320 + 104;
-								args_drawOptionIconSprite.args[3].Real = (double)y + 14;
-								drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
-
-								args_halign.args[0].Real = (double)1;
-								drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-								args_valign.args[0].Real = (double)1;
-								drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
-
-								// Draw Config Text
-
-								args_drawConfigNameText.args[1].I64 = (long long)y + 16;
-								if (mods[currentMod].hasConfig == false) {
-									if (noConfigError == true) {
-										std::string errorStr = (noConfigErrorTimer % 10 < 5 ? "" : "NO CONFIG");
-										args_drawConfigNameText.args[2].String = RefString::Alloc(errorStr.c_str(), strlen(errorStr.c_str()), false);
-									} else {
-										args_drawConfigNameText.args[2].String = RefString::Alloc("NO CONFIG", strlen("NO CONFIG"), false);
-									}
-									args_drawSetColor.args[0].Real = 255;
-									drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
-									args_drawConfigNameText.args[0].I64 = (long long)320 + 161;
-								} else {
-									if (configHovered == false) {
-										args_drawSetColor.args[0].Real = 16777215;
-									} else {
-										args_drawSetColor.args[0].Real = 0;
-									}
-									drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
-									args_drawConfigNameText.args[0].I64 = (long long)320 + 161;
-									args_drawConfigNameText.args[2].String = RefString::Alloc("CONFIG", strlen("CONFIG"), false);
-								}
-
-								drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
-
-								args_halign.args[0].Real = (double)0;
-								drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-								args_valign.args[0].Real = (double)0;
-								drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
+							args_drawSetColor.args[0].Real = 255;
+							drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+							args_drawConfigNameText.args[0].I64 = (long long)320 + 161;
+						} else {
+							if (configHovered == false) {
+								args_drawSetColor.args[0].Real = 16777215;
+							} else {
+								args_drawSetColor.args[0].Real = 0;
 							}
+							drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+							args_drawConfigNameText.args[0].I64 = (long long)320 + 161;
+							args_drawConfigNameText.args[2].String = RefString::Alloc("CONFIG", strlen("CONFIG"), false);
 						}
 
-					} else { // configSelected == true
-						args_halign.args[0].Real = (double)1;
-						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-
-						args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
-						drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
-
-						// Draw Config Name
-
-						drawTextOutlineArgs[2]->String = RefString::Alloc(mods[currentMod].config.name.c_str(), strlen(mods[currentMod].config.name.c_str()), false);
-						drawTextOutlineArgs[1]->Real = (double)(48 + 19);
-						drawTextOutlineArgs[8]->Real = (double)0;
-						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
-
-						drawTextOutlineArgs[1]->Real = (double)(48 + 16);
-						drawTextOutlineArgs[8]->Real = (double)16777215;
-						drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+						drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
 
 						args_halign.args[0].Real = (double)0;
 						drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
-
-						int currSetting = 0;
-
-						for (int i = 0; i < mods[currentMod].config.settings.size(); i++) {
-							if (mods[currentMod].config.settings[i].type == SETTING_BOOL) {
-								int y = 48 + 43 + (currSetting * 34);
-
-								// Draw Setting Background
-
-								args_drawOptionButtonSprite.args[2].Real = 320 + 12;
-								args_drawOptionButtonSprite.args[3].Real = y;
-								args_drawOptionButtonSprite.args[1].Real = (currentModSetting == currSetting);
-								drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
-
-								args_drawSetColor.args[0].Real = (currentModSetting == currSetting ? 0 : 16777215);
-								drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
-
-								// Draw Setting Name
-
-								args_drawConfigNameText.args[0].I64 = (long long)320 - 66;
-								args_drawConfigNameText.args[1].I64 = (long long)y + 8;
-								args_drawConfigNameText.args[2].String = RefString::Alloc(mods[currentMod].config.settings[i].name.c_str(), strlen(mods[currentMod].config.settings[i].name.c_str()), false);
-								drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
-
-								// Draw Setting Icon
-								// 0 - 8 = hud_optionIcons
-								// 9 - 21 = hud_graphicIcons
-
-								int iconIndex = mods[currentMod].config.settings[i].icon;
-								int actualIndex = iconIndex * 2;
-								if (actualIndex > 17) {
-									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_graphicIcons");
-									actualIndex -= 18;
-								} else {
-									args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_optionIcons");
-								}
-								if (actualIndex > -1) {
-									args_drawOptionIconSprite.args[1].Real = (currentModSetting == currSetting ? actualIndex + 1 : actualIndex);
-									args_drawOptionIconSprite.args[2].Real = 320 - 98;
-									args_drawOptionIconSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
-									drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
-								}
-
-								// Draw Setting Checkbox
-
-								args_drawToggleButtonSprite.args[1].Real = mods[currentMod].config.settings[i].boolValue + (2 * (currentModSetting == currSetting));
-								args_drawToggleButtonSprite.args[2].Real = 320 + 81;
-								args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
-								drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
-
-								currSetting++;
-							}
-						}
+						args_valign.args[0].Real = (double)0;
+						drawSetVAlignFunc(&result, Self, Other, 1, args_valign.args);
 					}
 				}
-			};
-			TitleScreen_Draw_0(pCodeEvent, Self, Other, Code, Res, Flags);
-			codeFuncTable[Code->i_CodeIndex] = TitleScreen_Draw_0;
-		} else if (_strcmpi(Code->i_pName, "gml_Object_obj_TitleCharacter_Draw_0") == 0) {
-			auto TitleCharacter_Draw_0 = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
-				if (drawTitleChars == true) {
-					CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
-				} else {
-					pCodeEvent->Cancel(true);
-				}
 
-			};
-			TitleCharacter_Draw_0(pCodeEvent, Self, Other, Code, Res, Flags);
-			codeFuncTable[Code->i_CodeIndex] = TitleCharacter_Draw_0;
+			} else { // configSelected == true
+				args_halign.args[0].Real = (double)1;
+				drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+				args_drawSetFont.args[0].Real = (double)getAssetIndexFromName("jpFont");
+				drawSetFontFunc(&result, Self, Other, 1, args_drawSetFont.args);
+
+				// Draw Config Name
+
+				drawTextOutlineArgs[2]->String = RefString::Alloc(mods[currentMod].config.name.c_str(), strlen(mods[currentMod].config.name.c_str()), false);
+				drawTextOutlineArgs[1]->Real = (double)(48 + 19);
+				drawTextOutlineArgs[8]->Real = (double)0;
+				drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+				drawTextOutlineArgs[1]->Real = (double)(48 + 16);
+				drawTextOutlineArgs[8]->Real = (double)16777215;
+				drawTextOutlineScript(Self, Other, &result, 10, drawTextOutlineArgs);
+
+				args_halign.args[0].Real = (double)0;
+				drawSetHAlignFunc(&result, Self, Other, 1, args_halign.args);
+
+				int currSetting = 0;
+
+				for (int i = 0; i < mods[currentMod].config.settings.size(); i++) {
+					if (mods[currentMod].config.settings[i].type == SETTING_BOOL) {
+						int y = 48 + 43 + (currSetting * 34);
+
+						// Draw Setting Background
+
+						args_drawOptionButtonSprite.args[2].Real = 320 + 12;
+						args_drawOptionButtonSprite.args[3].Real = y;
+						args_drawOptionButtonSprite.args[1].Real = (currentModSetting == currSetting);
+						drawSpriteFunc(&result, Self, Other, 4, args_drawOptionButtonSprite.args);
+
+						args_drawSetColor.args[0].Real = (currentModSetting == currSetting ? 0 : 16777215);
+						drawSetColorFunc(&result, Self, Other, 1, args_drawSetColor.args);
+
+						// Draw Setting Name
+
+						args_drawConfigNameText.args[0].I64 = (long long)320 - 66;
+						args_drawConfigNameText.args[1].I64 = (long long)y + 8;
+						args_drawConfigNameText.args[2].String = RefString::Alloc(mods[currentMod].config.settings[i].name.c_str(), strlen(mods[currentMod].config.settings[i].name.c_str()), false);
+						drawTextFunc(&result, Self, Other, 3, args_drawConfigNameText.args);
+
+						// Draw Setting Icon
+						// 0 - 8 = hud_optionIcons
+						// 9 - 21 = hud_graphicIcons
+
+						int iconIndex = mods[currentMod].config.settings[i].icon;
+						int actualIndex = iconIndex * 2;
+						if (actualIndex > 17) {
+							args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_graphicIcons");
+							actualIndex -= 18;
+						} else {
+							args_drawOptionIconSprite.args[0].I64 = getAssetIndexFromName("hud_optionIcons");
+						}
+						if (actualIndex > -1) {
+							args_drawOptionIconSprite.args[1].Real = (currentModSetting == currSetting ? actualIndex + 1 : actualIndex);
+							args_drawOptionIconSprite.args[2].Real = 320 - 98;
+							args_drawOptionIconSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
+							drawSpriteFunc(&result, Self, Other, 4, args_drawOptionIconSprite.args);
+						}
+
+						// Draw Setting Checkbox
+
+						args_drawToggleButtonSprite.args[1].Real = mods[currentMod].config.settings[i].boolValue + (2 * (currentModSetting == currSetting));
+						args_drawToggleButtonSprite.args[2].Real = 320 + 81;
+						args_drawToggleButtonSprite.args[3].Real = (double)48 + 56 + (currSetting * 34);
+						drawSpriteFunc(&result, Self, Other, 4, args_drawToggleButtonSprite.args);
+
+						currSetting++;
+					}
+				}
+			}
+		}
+	}
+	/*
+		Title Character Draw Event
+	*/
+	else if (Name == "gml_Object_obj_TitleCharacter_Draw_0") {
+		if (drawTitleChars == true) {
+			CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
 		} else {
-			auto UnmodifiedFunc = [](YYTKCodeEvent* pCodeEvent, CInstance* Self, CInstance* Other, CCode* Code, RValue* Res, int Flags) {
-				CallOriginal(pCodeEvent, Self, Other, Code, Res, Flags);
-			};
-			UnmodifiedFunc(pCodeEvent, Self, Other, Code, Res, Flags);
-			codeFuncTable[Code->i_CodeIndex] = UnmodifiedFunc;
+			pCodeEvent->Cancel(true);
 		}
 	}
 	// Tell the core the handler was successful.
-	return YYTK_OK;
+	return AURIE_SUCCESS;
+}
+
+EXPORTED AurieStatus ModuleInitialize(
+	IN AurieModule* Module,
+	IN const fs::path& ModulePath
+) {
+	UNREFERENCED_PARAMETER(ModulePath);
+
+	AurieStatus last_status = AURIE_SUCCESS;
+
+	// Gets a handle to the interface exposed by YYTK
+	// You can keep this pointer for future use, as it will not change unless YYTK is unloaded.
+	last_status = ObGetInterface(
+		"YYTK_Main",
+		(AurieInterfaceBase*&)(g_ModuleInterface)
+	);
+
+	// If we can't get the interface, we fail loading.
+	if (!AurieSuccess(last_status))
+		return AURIE_MODULE_DEPENDENCY_NOT_RESOLVED;
+
+	Print(CM_LIGHTGREEN, "[InfiCore] - Hello from PluginEntry!");
+
+	// Create callback for Frame Events
+	last_status = g_ModuleInterface->CreateCallback(
+		Module,
+		EVENT_FRAME,
+		FrameCallback,
+		999
+	);
+
+	if (!AurieSuccess(last_status)) {
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Failed to register callback!");
+	}
+
+	// Create callback for Object Events
+	last_status = g_ModuleInterface->CreateCallback(
+		Module,
+		EVENT_OBJECT_CALL,
+		CodeCallback,
+		999
+	);
+
+	if (!AurieSuccess(last_status)) {
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Failed to register callback!");
+	}
+
+	return AURIE_SUCCESS;
 }
 
 // Create an entry routine - it must be named exactly this, and must accept these exact arguments.
@@ -1139,14 +1201,14 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	PluginObject->PluginUnload = PluginUnload;
 
 	// Print a message to the console
-	PrintMessage(CLR_DEFAULT, "[%s v%d.%d.%d] - Hello from PluginEntry!", mod.name, mod.version.major, mod.version.minor, mod.version.build);
+	PrintMessage(CLR_DEFAULT, "[InfiCore] - Hello from PluginEntry!");
 
 	PluginAttributes_t* PluginAttributes = nullptr;
 
 	// Get the attributes for the plugin - this is an opaque structure, as it may change without any warning.
 	// If Status == YYTK_OK (0), then PluginAttributes is guaranteed to be valid (non-null).
 	if (YYTKStatus Status = PmGetPluginAttributes(PluginObject, PluginAttributes)) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmGetPluginAttributes failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
+		PrintError(__FILE__, __LINE__, "[InfiCore] - PmGetPluginAttributes failed with 0x%x", Status);
 		return YYTK_FAIL;
 	}
 
@@ -1161,7 +1223,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	);
 
 	if (Status) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmCreateCallbackEx failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
+		PrintError(__FILE__, __LINE__, "[InfiCore] - PmCreateCallbackEx failed with 0x%x", Status);
 		return YYTK_FAIL;
 	}
 
@@ -1176,7 +1238,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 	);
 
 	if (Status) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] - PmCreateCallbackEx failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Status);
+		PrintError(__FILE__, __LINE__, "[InfiCore] - PmCreateCallbackEx failed with 0x%x", Status);
 		return YYTK_FAIL;
 	}
 
@@ -1186,7 +1248,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 
 		if (GetFileAttributes(dirName) == INVALID_FILE_ATTRIBUTES) {
 			if (CreateDirectory(dirName, NULL)) {
-				PrintMessage(CLR_GREEN, "[%s v%d.%d.%d] - Directory \"modconfigs\" created!", mod.name, mod.version.major, mod.version.minor, mod.version.build);
+				PrintMessage(CLR_GREEN, "[InfiCore] - Directory \"modconfigs\" created!");
 			} else {
 				PrintError(__FILE__, __LINE__, "Failed to create the modconfigs directory. Error code: %lu", GetLastError());
 				return YYTK_FAIL;
@@ -1208,7 +1270,7 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 
 			config = data.template get<ModConfig>();
 		}
-		PrintMessage(CLR_GREEN, "[%s v%d.%d.%d] - %s loaded successfully!", mod.name, mod.version.major, mod.version.minor, mod.version.build, fileName.c_str());
+		PrintMessage(CLR_GREEN, "[InfiCore] - %s loaded successfully!", fileName.c_str());
 	}
 
 	// Function Pointers
@@ -1252,37 +1314,4 @@ DllExport YYTKStatus PluginEntry(YYTKPlugin* PluginObject) {
 
 	// Off it goes to the core.
 	return YYTK_OK;
-}
-
-// The routine that gets called on plugin unload.
-// Registered in PluginEntry - you should use this to release resources.
-YYTKStatus PluginUnload() {
-	std::cout << "PluginUnload called!" << std::endl;
-	YYTKStatus Removal = PmRemoveCallback(g_pFrameCallbackAttributes);
-
-	// If we didn't succeed in removing the callback.
-	if (Removal != YYTK_OK) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] PmRemoveCallback failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Removal);
-	}
-
-	Removal = PmRemoveCallback(g_pCodeCallbackAttributes);
-
-	// If we didn't succeed in removing the callback.
-	if (Removal != YYTK_OK) {
-		PrintError(__FILE__, __LINE__, "[%s v%d.%d.%d] PmRemoveCallback failed with 0x%x", mod.name, mod.version.major, mod.version.minor, mod.version.build, Removal);
-	}
-
-	PrintMessage(CLR_DEFAULT, "[%s v%d.%d.%d] - Goodbye!", mod.name, mod.version.major, mod.version.minor, mod.version.build);
-
-	return YYTK_OK;
-}
-
-// Boilerplate setup for a Windows DLL, can just return TRUE.
-// This has to be here or else you get linker errors (unless you disable the main method)
-BOOL APIENTRY DllMain(
-	HMODULE hModule,
-	DWORD  ul_reason_for_call,
-	LPVOID lpReserved
-) {
-	return 1;
 }
