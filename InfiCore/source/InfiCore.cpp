@@ -1,17 +1,12 @@
-#define YYSDK_PLUGIN
-#include "InfiCore.hpp"	// Include our header
-#include "ModInfo.h"
-#include <Windows.h>    // Include Windows's mess.
-#include <vector>       // Include the STL vector.
-#include <unordered_map>
-#include <functional>
-#include <iostream>
-#include <fstream>
-#include "json.hpp"
-#include <filesystem>
-#include "Utils/MH/MinHook.h"
-#include "Features/PluginManager/Structures/PmStructures.hpp"
-using json = nlohmann::json;
+#include <YYToolkit/Shared.hpp>
+
+#include <map>
+#include <random>
+
+using namespace Aurie;
+using namespace YYTK;
+
+static YYTKInterface* g_ModuleInterface = nullptr;
 
 static struct Version {
 	int major = VERSION_MAJOR;
