@@ -13,7 +13,9 @@ using json = nlohmann::json;
 
 static YYTKInterface* g_ModuleInterface = nullptr;
 
-// Config variables
+/*
+		Config Variables
+*/
 static enum SettingType {
 	SETTING_BOOL = 0
 };
@@ -37,80 +39,6 @@ static struct ModConfig {
 	std::vector<Setting> settings = { debugEnabled };
 } config;
 
-void to_json(json& j, const ModConfig& c) {
-	j = json {
-		"debugEnabled", {
-			{ "icon", c.debugEnabled.icon },
-			{ "value", c.debugEnabled.boolValue }
-		}
-	};
-}
-
-void from_json(const json& j, ModConfig& c) {
-	try {
-		j.at("debugEnabled").at("icon").get_to(c.debugEnabled.icon);
-		j.at("debugEnabled").at("value").get_to(c.debugEnabled.boolValue);
-	} catch (const json::out_of_range& e) {
-		PrintError(__FILE__, __LINE__, "%s", e.what());
-		std::string fileName = formatString(std::string("InfiCore")) + "-config.json";
-		GenerateConfig(fileName);
-	}
-}
-
-static struct RemoteConfig {
-	std::string name;
-	std::vector<Setting> settings;
-};
-
-static struct RemoteMod {
-	std::string name;
-	bool enabled = false;
-	bool was_toggled = false;
-	RemoteConfig config;
-	bool has_config = false;
-
-	RemoteMod(std::string n, bool e) {
-		name = n;
-		enabled = e;
-	}
-};
-
-std::string formatString(const std::string& input) {
-	std::string formattedString = input;
-
-	for (char& c : formattedString) {
-		c = std::tolower(c);
-	}
-
-	for (char& c : formattedString) {
-		if (c == ' ') {
-			c = '-';
-		}
-	}
-
-	return formattedString;
-}
-
-void GenerateConfig(std::string fileName) {
-	json data;
-	
-	for (const Setting& setting : config.settings) {
-		json settingData;
-		settingData["icon"] = setting.icon;
-		if (setting.type == SETTING_BOOL) settingData["value"] = setting.boolValue;
-		data[setting.name.c_str()] = settingData;
-	}
-
-	std::ofstream configFile("modconfigs/" + fileName);
-	if (configFile.is_open()) {
-		Print(CM_WHITE, "[InfiCore] - Config file \"%s\" created!", fileName.c_str());
-		configFile << std::setw(4) << data << std::endl;
-		configFile.close();
-	} else {
-		PrintError(__FILE__, __LINE__, "[InfiCore] - Error opening config file \"%s\"", fileName.c_str());
-	}
-}
-
 /*
 		Inline Functions
 */
@@ -132,6 +60,83 @@ inline static double GetAssetIndexFromName(const char* name) {
 	double index = CallBuiltin("asset_get_index", { RValue(name, g_ModuleInterface) }).AsReal();
 	return index;
 }
+
+/*
+		Helper Functions
+*/
+std::string FormatString(const std::string& input) {
+	std::string formattedString = input;
+
+	for (char& c : formattedString) {
+		c = std::tolower(c);
+	}
+
+	for (char& c : formattedString) {
+		if (c == ' ') {
+			c = '-';
+		}
+	}
+
+	return formattedString;
+}
+
+void GenerateConfig(std::string fileName) {
+	json data;
+
+	for (const Setting& setting : config.settings) {
+		json settingData;
+		settingData["icon"] = setting.icon;
+		if (setting.type == SETTING_BOOL) settingData["value"] = setting.boolValue;
+		data[setting.name.c_str()] = settingData;
+	}
+
+	std::ofstream configFile("modconfigs/" + fileName);
+	if (configFile.is_open()) {
+		Print(CM_WHITE, "[InfiCore] - Config file \"%s\" created!", fileName.c_str());
+		configFile << std::setw(4) << data << std::endl;
+		configFile.close();
+	} else {
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Error opening config file \"%s\"", fileName.c_str());
+	}
+}
+
+void to_json(json& j, const ModConfig& c) {
+	j = json {
+		"debugEnabled", {
+			{ "icon", c.debugEnabled.icon },
+			{ "value", c.debugEnabled.boolValue }
+		}
+	};
+}
+
+void from_json(const json& j, ModConfig& c) {
+	try {
+		j.at("debugEnabled").at("icon").get_to(c.debugEnabled.icon);
+		j.at("debugEnabled").at("value").get_to(c.debugEnabled.boolValue);
+	} catch (const json::out_of_range& e) {
+		PrintError(__FILE__, __LINE__, "%s", e.what());
+		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
+		GenerateConfig(fileName);
+	}
+}
+
+static struct RemoteConfig {
+	std::string name;
+	std::vector<Setting> settings;
+};
+
+static struct RemoteMod {
+	std::string name;
+	bool enabled = false;
+	bool was_toggled = false;
+	RemoteConfig config;
+	bool has_config = false;
+
+	RemoteMod(std::string n, bool e) {
+		name = n;
+		enabled = e;
+	}
+};
 
 /*
 		GML Inline Functions
@@ -209,11 +214,26 @@ inline static void audio_play_sound(const char* name, double priority, bool loop
 	CallBuiltin("audio_play_sound", { GetAssetIndexFromName(name), priority, loop });
 }
 
-RValue* draw_text_outline_args[10];
-RValue* command_promps_args[3];
-
 PFUNC_YYGMLScript draw_text_outline_script = nullptr;
+std::vector<RValue*> draw_text_outline_args = {
+	new RValue((double)320),
+	new RValue((double)(48 + 13)),
+	new RValue("MOD SETTINGS", g_ModuleInterface),
+	new RValue((double)1),
+	new RValue((double)0),
+	new RValue((double)32),
+	new RValue((double)4),
+	new RValue((double)300),
+	new RValue((double)0),
+	new RValue((double)1)
+};
+
 PFUNC_YYGMLScript command_promps_script = nullptr;
+std::vector<RValue*> command_promps_args = {
+	new RValue((double)1),
+	new RValue((double)1),
+	new RValue((double)1)
+};
 
 
 static void HookScriptFunction(AurieModule* Module, const char* HookIdentifier, const char* ScriptFunctionName, void* DetourFunction, void** OrigScript) {
@@ -307,7 +327,7 @@ static void GetMods() {
 	std::string mods_path = "mods\\Aurie";
 	for (const auto& entry : fs::directory_iterator(mods_path)) {
 		std::string mod_name = entry.path().filename().string();
-		RemoteMod new_mod(mod_name, mod_name.contains(".disabled") ? false : true);
+		RemoteMod new_mod(mod_name, mod_name.find(".disabled") != std::string::npos ? false : true);
 		mods.push_back(new_mod);
 	}
 
@@ -579,31 +599,11 @@ static AurieStatus CodeCallback(
 		GetModConfigs();
 		if (version_text_changed == false) {
 			std::string_view version = variable_global_get("version").AsString(g_ModuleInterface);
-			if (version.contains("Modded")) {
+			if (version.find("Modded") != std::string::npos) {
 				std::string modded_ver_str = std::string(version) + " (Modded)";
 				variable_global_set("version", modded_ver_str.c_str());
 			}
 			version_text_changed = true;
-		}
-		if (args_commandPromps.isInitialized == false) {
-			args_commandPromps = ArgSetup((double)1, (double)1, (double)1);
-			commandPrompsArgs[0] = new YYRValue((double)1);
-					
-			commandPrompsArgs[1] = new YYRValue((double)1);
-			commandPrompsArgs[2] = new YYRValue((double)1);
-		}
-		if (args_configHeaderDraw.isInitialized == false) {
-			args_configHeaderDraw = ArgSetup((double)320, (double)(48 + 13), "TEST", (double)1, (double)0, (double)32, (double)4, (double)100, (double)0, (double)1);
-			drawTextOutlineArgs[0] = new YYRValue((double)320);
-			drawTextOutlineArgs[1] = new YYRValue((double)(48 + 13));
-			drawTextOutlineArgs[2] = new YYRValue("MOD SETTINGS");
-			drawTextOutlineArgs[3] = new YYRValue((double)1);
-			drawTextOutlineArgs[4] = new YYRValue((double)0);
-			drawTextOutlineArgs[5] = new YYRValue((double)32);
-			drawTextOutlineArgs[6] = new YYRValue((double)4);
-			drawTextOutlineArgs[7] = new YYRValue((double)300);
-			drawTextOutlineArgs[8] = new YYRValue((double)0);
-			drawTextOutlineArgs[9] = new YYRValue((double)1);
 		}
 
 		if (!CodeContext.CalledOriginal()) CodeContext.Call();
@@ -619,10 +619,10 @@ static AurieStatus CodeCallback(
 		RValue eng = struct_get(title_buttons, "eng");
 
 		std::string_view play_text = array_get(eng, 0);
-		if (play_text.contains("Modded")) array_set(eng, 0, "Play Modded!");
+		if (play_text.find("Modded") != std::string::npos) array_set(eng, 0, "Play Modded!");
 
 		std::string_view lb_text = array_get(eng, 3);
-		if (lb_text.contains("Mod Settings")) array_set(eng, 3, "Mod Settings");
+		if (lb_text.find("Mod Settings") != std::string::npos) array_set(eng, 3, "Mod Settings");
 	}
 	/*
 			Title Screen Draw Event
@@ -635,8 +635,8 @@ static AurieStatus CodeCallback(
 			// Draw Mod Config Menu Background
 			draw_sprite("hud_optionsmenu", 0, 320, 48);
 
-			// Draw Controls Text		
-			commandPrompsScript(Self, Other, &result, 3, commandPrompsArgs); FIX_THIS_EVENTUALLY;
+			// Draw Controls Text
+			command_promps_script(Self, Other, &result, 3, command_promps_args.data());
 
 			if (config_selected == false) {
 				draw_set_font("jpFont_Big");
@@ -645,14 +645,14 @@ static AurieStatus CodeCallback(
 
 				// Draw Mod Settings Menu Title
 
-				drawTextOutlineArgs[2]->String = RefString::Alloc("MOD SETTINGS", strlen("MOD SETTINGS"), false);
-				drawTextOutlineArgs[1]->Real = (double)(48 + 13);
-				drawTextOutlineArgs[8]->Real = (double)0;
-				draw_text_outline_script(Self, Other, &result, 10, drawTextOutlineArgs);
+				draw_text_outline_args[2] = new RValue("MOD SETTINGS", g_ModuleInterface);
+				draw_text_outline_args[1] = new RValue((double)(48 + 13));
+				draw_text_outline_args[8] = new RValue((double)0);
+				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
 
-				drawTextOutlineArgs[1]->Real = (double)(48 + 10);
-				drawTextOutlineArgs[8]->Real = (double)16777215;
-				draw_text_outline_script(Self, Other, &result, 10, drawTextOutlineArgs);
+				draw_text_outline_args[1] = new RValue((double)(48 + 10));
+				draw_text_outline_args[8] = new RValue((double)16777215);
+				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
 
 				draw_set_font("jpFont");
 
@@ -732,14 +732,14 @@ static AurieStatus CodeCallback(
 
 				// Draw Config Name
 
-				drawTextOutlineArgs[2]->String = RefString::Alloc(mods[current_mod].config.name.c_str(), strlen(mods[current_mod].config.name.c_str()), false);
-				drawTextOutlineArgs[1]->Real = (double)(48 + 19);
-				drawTextOutlineArgs[8]->Real = (double)0;
-				draw_text_outline_script(Self, Other, &result, 10, drawTextOutlineArgs);
+				draw_text_outline_args[2] = new RValue(mods[current_mod].config.name.c_str(), g_ModuleInterface);
+				draw_text_outline_args[1] = new RValue((double)(48 + 19));
+				draw_text_outline_args[8] = new RValue((double)0);
+				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
 
-				drawTextOutlineArgs[1]->Real = (double)(48 + 16);
-				drawTextOutlineArgs[8]->Real = (double)16777215;
-				draw_text_outline_script(Self, Other, &result, 10, drawTextOutlineArgs);
+				draw_text_outline_args[1] = new RValue((double)(48 + 16));
+				draw_text_outline_args[8] = new RValue((double)16777215);
+				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
 
 				draw_set_halign(0);
 
@@ -858,7 +858,7 @@ EXPORTED AurieStatus ModuleInitialize(
 			}
 		}
 
-		std::string fileName = formatString(std::string("InfiCore")) + "-config.json";
+		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
 		std::ifstream configFile("modconfigs/" + fileName);
 		json data;
 		if (configFile.is_open() == false) {	// no config file
@@ -901,6 +901,8 @@ EXPORTED AurieStatus ModuleInitialize(
 	status = g_ModuleInterface->GetScriptData(command_promps_index - 10000, command_promps_cscript);
 	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
 	command_promps_script = command_promps_cscript->m_Functions->m_ScriptFunction;
+
+	Print(CM_LIGHTPURPLE, "END OF INITIALIZE REACHED");
 
 	return AURIE_SUCCESS;
 }
