@@ -247,7 +247,7 @@ static void HookScriptFunction(AurieModule* Module, const char* HookIdentifier, 
 
 	if (!AurieSuccess(status)) return;
 
-	status = MmCreateHook(Module, HookIdentifier, script_function->m_Functions->m_CodeFunction, DetourFunction, reinterpret_cast<PVOID*>(&OrigScript));
+	status = MmCreateHook(Module, HookIdentifier, script_function->m_Functions->m_CodeFunction, DetourFunction, OrigScript);
 }
 
 bool HAS_CONFIG = true;
@@ -324,6 +324,7 @@ static void LoadUnloadMods() {
 
 static void GetMods() {
 	// Find Mods
+	mods.clear();
 	std::string mods_path = "mods\\Aurie";
 	for (const auto& entry : fs::directory_iterator(mods_path)) {
 		std::string mod_name = entry.path().filename().string();
@@ -373,23 +374,24 @@ static void GetModConfigs() {
 }
 
 static void SetConfigSettings() {
-	for (int mod = 0; mod < mods.size(); mod++) {
-		std::ifstream in_file("modconfigs/" + mods[mod].config.name);
+	for (RemoteMod& mod : mods) {
+		if (mod.has_config == false) continue;
+		std::ifstream in_file("modconfigs/" + mod.config.name);
 		if (in_file.fail()) {
-			PrintError(__FILE__, __LINE__, "Config for \"%s\" not found!", mods[mod].name);
+			PrintError(__FILE__, __LINE__, "Config for \"%s\" not found!", mod.name);
 			continue;
 		}
 		json data;
 		in_file >> data;
 		in_file.close();
 
-		for (int setting = 0; setting < mods[mod].config.settings.size(); setting++) {
-			if (mods[mod].config.settings[setting].type == SETTING_BOOL) {
-				data[mods[mod].config.settings[setting].name]["value"] = mods[mod].config.settings[setting].boolValue;
+		for (int setting = 0; setting < mod.config.settings.size(); setting++) {
+			if (mod.config.settings[setting].type == SETTING_BOOL) {
+				data[mod.config.settings[setting].name]["value"] = mod.config.settings[setting].boolValue;
 			}
 		}
 
-		std::ofstream out_file("modconfigs/" + mods[mod].config.name);
+		std::ofstream out_file("modconfigs/" + mod.config.name);
 		out_file << data.dump(4);
 		out_file.close();
 	}
@@ -430,7 +432,7 @@ static RValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other,
 			}
 		}
 	} else {
-		RValue* res = origConfirmedTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = origConfirmedTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -456,7 +458,7 @@ static RValue* ReturnMenuTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 			LoadUnloadMods();
 		}
 	} else {
-		RValue* res = origReturnMenuTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = origReturnMenuTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -475,7 +477,7 @@ static RValue* SelectLeftTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 			}
 		}
 	} else {
-		RValue* res = origSelectLeftTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = origSelectLeftTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -494,7 +496,7 @@ static RValue* SelectRightTitleScreenFuncDetour(CInstance* Self, CInstance* Othe
 			}
 		}
 	} else {
-		RValue* res = origSelectRightTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = origSelectRightTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -514,7 +516,7 @@ static RValue* SelectUpTitleScreenFuncDetour(CInstance* Self, CInstance* Other, 
 			audio_play_sound("snd_menu_select", 30, false);
 		}
 	} else {
-		RValue* res = origSelectUpTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = origSelectUpTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -534,7 +536,7 @@ static RValue* SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 			audio_play_sound("snd_menu_select", 30, false);
 		}
 	} else {
-		RValue* res = origSelectDownTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = origSelectDownTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -599,7 +601,7 @@ static AurieStatus CodeCallback(
 		GetModConfigs();
 		if (version_text_changed == false) {
 			std::string_view version = variable_global_get("version").AsString(g_ModuleInterface);
-			if (version.find("Modded") != std::string::npos) {
+			if (version.find("Modded") == std::string::npos) {
 				std::string modded_ver_str = std::string(version) + " (Modded)";
 				variable_global_set("version", modded_ver_str.c_str());
 			}
@@ -619,10 +621,10 @@ static AurieStatus CodeCallback(
 		RValue eng = struct_get(title_buttons, "eng");
 
 		std::string_view play_text = array_get(eng, 0);
-		if (play_text.find("Modded") != std::string::npos) array_set(eng, 0, "Play Modded!");
+		if (play_text.find("Modded") == std::string::npos) array_set(eng, 0, "Play Modded!");
 
 		std::string_view lb_text = array_get(eng, 3);
-		if (lb_text.find("Mod Settings") != std::string::npos) array_set(eng, 3, "Mod Settings");
+		if (lb_text.find("Mod Settings") == std::string::npos) array_set(eng, 3, "Mod Settings");
 	}
 	/*
 			Title Screen Draw Event
@@ -668,8 +670,12 @@ static AurieStatus CodeCallback(
 					draw_set_color(current_mod == i && !config_hovered ? 0 : 16777215);
 
 					// Draw Mod Name
-
-					draw_text(320 - 78, y + 8, mods[i].name.c_str());
+					std::string formatted_name = mods[i].name;
+					if (formatted_name.length() > 22) {
+						formatted_name = formatted_name.substr(0, 19);
+						formatted_name += "...";
+					}
+					draw_text(320 - 78, y + 8, formatted_name.c_str());
 
 					// Draw Mod Checkbox
 
@@ -700,11 +706,10 @@ static AurieStatus CodeCallback(
 
 						// Draw Config Text
 
-						const char* draw_config_name_str = nullptr;
+						std::string draw_config_name_str;
 						if (mods[current_mod].has_config == false) {
 							if (no_config_error == true) {
-								std::string errorStr = (no_config_error_timer % 10 < 5 ? "" : "NO CONFIG");
-								draw_config_name_str = errorStr.c_str();
+								draw_config_name_str = (no_config_error_timer % 10 < 5 ? "" : "NO CONFIG");
 							} else {
 								draw_config_name_str = "NO CONFIG";
 							}
@@ -718,7 +723,7 @@ static AurieStatus CodeCallback(
 							draw_config_name_str = "CONFIG";
 						}
 
-						draw_text(320 + 161, y + 16, draw_config_name_str);
+						draw_text(320 + 161, y + 16, draw_config_name_str.c_str());
 
 						draw_set_halign(0);
 						draw_set_valign(0);
@@ -851,14 +856,14 @@ EXPORTED AurieStatus ModuleInitialize(
 
 		if (GetFileAttributes(dirName) == INVALID_FILE_ATTRIBUTES) {
 			if (CreateDirectory(dirName, NULL)) {
-				Print(CM_GREEN, "[InfiCore] - Directory \"modconfigs\" created!");
+				Print(CM_LIGHTGREEN, "[InfiCore] - Directory \"modconfigs\" created!");
 			} else {
 				PrintError(__FILE__, __LINE__, "Failed to create the modconfigs directory. Error code: %lu", GetLastError());
 				return AURIE_ACCESS_DENIED;
 			}
 		}
 
-		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
+		std::string fileName = FormatString(std::string("Infi-Core")) + "-config.json";
 		std::ifstream configFile("modconfigs/" + fileName);
 		json data;
 		if (configFile.is_open() == false) {	// no config file
@@ -873,7 +878,7 @@ EXPORTED AurieStatus ModuleInitialize(
 
 			config = data.template get<ModConfig>();
 		}
-		Print(CM_GREEN, "[InfiCore] - %s loaded successfully!", fileName.c_str());
+		Print(CM_LIGHTGREEN, "[InfiCore] - %s loaded successfully!", fileName.c_str());
 	}
 
 	/*
@@ -902,7 +907,7 @@ EXPORTED AurieStatus ModuleInitialize(
 	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
 	command_promps_script = command_promps_cscript->m_Functions->m_ScriptFunction;
 
-	Print(CM_GREEN, "[InfiCore] - Everything initialized successfully!");
+	Print(CM_LIGHTGREEN, "[InfiCore] - Everything initialized successfully!");
 
 	return AURIE_SUCCESS;
 }
