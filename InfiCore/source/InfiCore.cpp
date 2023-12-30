@@ -890,7 +890,7 @@ EXPORTED AurieStatus ModuleInitialize(
 	status = g_ModuleInterface->GetNamedRoutineIndex("gml_Script_draw_text_outline", &draw_text_outline_index);
 	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
 	CScript* draw_text_outline_cscript = nullptr;
-	status = g_ModuleInterface->GetScriptData(draw_text_outline_index - 10000, draw_text_outline_cscript);
+	status = g_ModuleInterface->GetScriptData(draw_text_outline_index - 100000, draw_text_outline_cscript);
 	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
 	draw_text_outline_script = draw_text_outline_cscript->m_Functions->m_ScriptFunction;
 
@@ -898,11 +898,11 @@ EXPORTED AurieStatus ModuleInitialize(
 	status = g_ModuleInterface->GetNamedRoutineIndex("gml_Script_commandPromps", &command_promps_index);
 	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
 	CScript* command_promps_cscript = nullptr;
-	status = g_ModuleInterface->GetScriptData(command_promps_index - 10000, command_promps_cscript);
+	status = g_ModuleInterface->GetScriptData(command_promps_index - 100000, command_promps_cscript);
 	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
 	command_promps_script = command_promps_cscript->m_Functions->m_ScriptFunction;
 
-	Print(CM_LIGHTPURPLE, "END OF INITIALIZE REACHED");
+	Print(CM_GREEN, "[InfiCore] - Everything initialized successfully!");
 
 	return AURIE_SUCCESS;
 }
