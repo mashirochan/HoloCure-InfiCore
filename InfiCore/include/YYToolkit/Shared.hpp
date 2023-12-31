@@ -7,6 +7,10 @@
 #ifndef YYTK_SHARED_H_
 #define YYTK_SHARED_H_
 
+#define YYTK_MAJOR 3
+#define YYTK_MINOR 1
+#define YYTK_PATCH 1
+
 #include <Aurie/shared.hpp>
 #include <FunctionWrapper/FunctionWrapper.hpp>
 #include <d3d11.h>
@@ -23,10 +27,8 @@
 #define NULL_INDEX INT_MIN
 #endif
 
-namespace YYTK
-{
-	enum CmColor : uint8_t
-	{
+namespace YYTK {
+	enum CmColor : uint8_t {
 		CM_BLACK = 0,
 		CM_BLUE,
 		CM_GREEN,
@@ -45,8 +47,7 @@ namespace YYTK
 		CM_BRIGHTWHITE
 	};
 
-	enum RValueType : unsigned int
-	{
+	enum RValueType : unsigned int {
 		VALUE_REAL = 0,				// Real value
 		VALUE_STRING,				// String value
 		VALUE_ARRAY,				// Array value
@@ -67,8 +68,7 @@ namespace YYTK
 	};
 
 	// These cannot be bitwise-operated on anymore
-	enum EventTriggers : uint32_t
-	{
+	enum EventTriggers : uint32_t {
 		EVENT_OBJECT_CALL = 1,	// The event represents a Code_Execute() call.
 		EVENT_FRAME = 2,		// The event represents an IDXGISwapChain::Present() call.
 		EVENT_RESIZE = 3,		// The event represents an IDXGISwapChain::ResizeBuffers() call.
@@ -76,8 +76,7 @@ namespace YYTK
 		EVENT_WNDPROC = 5		// The event represents a WndProc() call.
 	};
 
-	enum InstanceKeywords : int
-	{
+	enum InstanceKeywords : int {
 		VAR_SELF = -1,
 		VAR_OTHER = -2,
 		VAR_ALL = -3,
@@ -97,8 +96,7 @@ namespace YYTK
 	struct RValue;
 	struct RVariableRoutine;
 
-	struct YYGMLException
-	{
+	struct YYGMLException {
 		char m_Object[16];
 	};
 
@@ -117,19 +115,17 @@ namespace YYTK
 
 	using PFUNC_RAW = void(*)();
 
-	using PFUNC_YYGMLScript = RValue * (*)(
+	using PFUNC_YYGMLScript = RValue & (*)(
 		IN CInstance* Self,
 		IN CInstance* Other,
-		OUT RValue* ReturnValue,
+		OUT RValue& Result,
 		IN int ArgumentCount,
-		IN RValue** Arguments
+		IN RValue** Arguments // Array of RValue pointers
 		);
 
 #pragma pack(push, 4)
-	struct RValue
-	{
-		union
-		{
+	struct RValue {
+		union {
 			int32_t m_i32;
 			int64_t m_i64;
 			double m_Real;
@@ -143,6 +139,10 @@ namespace YYTK
 
 		// Constructors
 		RValue();
+
+		RValue(
+			IN std::initializer_list<RValue> Values
+		);
 
 		RValue(
 			IN bool Value
@@ -165,22 +165,66 @@ namespace YYTK
 		);
 
 		RValue(
+			IN const char* Value
+		);
+
+		RValue(
+			IN const char8_t* Value
+		);
+
+		RValue(
+			IN std::string_view Value
+		);
+
+		RValue(
+			IN std::u8string_view Value
+		);
+
+		RValue(
+			IN const std::string& Value
+		);
+
+		RValue(
+			IN const std::u8string& Value
+		);
+
+		RValue(
 			IN std::string_view Value,
 			IN YYTKInterface* Interface
 		);
 
+		// Custom getters
 		bool AsBool() const;
 
 		double AsReal() const;
 
+		std::string_view AsString();
+
 		std::string_view AsString(
 			IN YYTKInterface* Interface
+		);
+
+		// Overloaded operators
+		RValue& operator[](
+			IN size_t Index
+			);
+
+		RValue& operator[](
+			IN std::string_view Element
+			);
+
+		// STL-like access
+		RValue& at(
+			IN size_t Index
+		);
+
+		RValue& at(
+			IN std::string_view Element
 		);
 	};
 #pragma pack(pop)
 
-	struct RToken
-	{
+	struct RToken {
 		int m_Kind;
 		unsigned int m_Type;
 		int m_Ind;
@@ -191,11 +235,9 @@ namespace YYTK
 		int m_Position;
 	};
 
-	struct YYGMLFuncs
-	{
+	struct YYGMLFuncs {
 		const char* m_Name;
-		union
-		{
+		union {
 			PFUNC_YYGMLScript m_ScriptFunction;
 			PFUNC_YYGML m_CodeFunction;
 			PFUNC_RAW m_RawFunction;
@@ -203,8 +245,7 @@ namespace YYTK
 		PVOID m_FunctionVariables; // YYVAR
 	};
 
-	struct CCode
-	{
+	struct CCode {
 		int (**_vptr$CCode)(void);
 		CCode* m_Next;
 		int m_Kind;
@@ -228,15 +269,13 @@ namespace YYTK
 		const char* GetName() const { return this->m_Name; }
 	};
 
-	struct CScript
-	{
+	struct CScript {
 		int (**_vptr$CScript)(void);
 		CCode* m_Code;
 		YYGMLFuncs* m_Functions;
 		CInstance* m_StaticObject;
 
-		union
-		{
+		union {
 			const char* m_Script;
 			int m_CompiledIndex;
 		};
@@ -265,8 +304,7 @@ namespace YYTK
 	typedef void (*PFUNC_process)(HTTP_REQ_CONTEXT* _pContext);
 
 	// https://github.com/YoYoGames/GMEXT-Steamworks/blob/main/source/Steamworks_vs/Steamworks/Extension_Interface.h#L106
-	struct YYRunnerInterface
-	{
+	struct YYRunnerInterface {
 		// basic interaction with the user
 		void (*DebugConsoleOutput)(const char* fmt, ...); // hook to YYprintf
 		void (*ReleaseConsoleOutput)(const char* fmt, ...);
@@ -414,6 +452,18 @@ namespace YYTK
 		bool (*isRunningFromIDE)();
 	};
 
+	struct CInstance {
+		// Overloaded operators
+		RValue& operator[](
+			IN std::string_view Element
+			);
+
+		// STL-like access
+		RValue& at(
+			IN std::string_view Element
+		);
+	};
+
 	// ExecuteIt
 	using FWCodeEvent = FunctionWrapper<bool(CInstance*, CInstance*, CCode*, int, RValue*)>;
 	// IDXGISwapChain::Present
@@ -425,8 +475,7 @@ namespace YYTK
 	// WndProc calls
 	using FWWndProc = FunctionWrapper<LRESULT(HWND, UINT, WPARAM, LPARAM)>;
 
-	class YYTKInterface : public Aurie::AurieInterfaceBase
-	{
+	class YYTKInterface : public Aurie::AurieInterfaceBase {
 	public:
 		// === Interface Functions ===
 		virtual Aurie::AurieStatus Create() = 0;
@@ -553,6 +602,12 @@ namespace YYTK
 			IN CInstance* TargetInstance,
 			OPTIONAL IN int ArrayIndex,
 			IN RValue& Value
+		) = 0;
+
+		virtual Aurie::AurieStatus GetArrayEntry(
+			IN RValue& Value,
+			IN size_t ArrayIndex,
+			OUT RValue*& ArrayElement
 		) = 0;
 	};
 }

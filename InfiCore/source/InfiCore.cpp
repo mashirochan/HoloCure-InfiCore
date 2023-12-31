@@ -1,4 +1,4 @@
-#include <YYToolkit/Shared.hpp>
+﻿#include <YYToolkit/Shared.hpp>
 #include <nlohmann/json.hpp>
 
 #include <vector>
@@ -6,6 +6,7 @@
 #include <fstream>
 #include <filesystem>
 #include <string_view>
+#include <unordered_map>
 
 using namespace Aurie;
 using namespace YYTK;
@@ -40,6 +41,38 @@ static struct ModConfig {
 } config;
 
 /*
+		Localization Variables
+*/
+using LocalizationMap = std::unordered_map<std::string, std::unordered_map<std::string, std::u8string>>;
+
+LocalizationMap locales = {
+	{"eng", {
+		{"version_modded", u8" (Modded)"},
+		{"play_modded", u8"Play Modded!"},
+		{"mod_settings", u8"Mod Settings"},
+		{"mod_settings_upper", u8"MOD SETTINGS"},
+		{"config", u8"CONFIG"},
+		{"no_config", u8"NO CONFIG"}
+	}},
+	{"jp", {
+		{"version_modded", u8" (MODあり)"},
+		{"play_modded", u8"MODをオンにする！"},
+		{"mod_settings", u8"MOD設定"},
+		{"mod_settings_upper", u8"MOD設定"},
+		{"config", u8"コンフィグ"},
+		{"no_config", u8"ノーコンフィグ"}
+	}},
+	{"Id", {
+		{"version_modded", u8" (Dimodifikasi)"},
+		{"play_modded", u8"Mainkan Dimodifikasi!"},
+		{"mod_settings", u8"Pengaturan Modifikasi"},
+		{"mod_settings_upper", u8"PENGATURAN MODIFIKASI"},
+		{"config", u8"KONFIGURASI"},
+		{"no_config", u8"TANPA KONFIGURASI"}
+	}}
+};
+
+/*
 		Inline Functions
 */
 template <typename... TArgs>
@@ -57,14 +90,19 @@ inline static RValue CallBuiltin(const char* FunctionName, std::vector<RValue> A
 }
 
 inline static double GetAssetIndexFromName(const char* name) {
-	double index = CallBuiltin("asset_get_index", { RValue(name, g_ModuleInterface) }).AsReal();
+	double index = CallBuiltin("asset_get_index", { name }).AsReal();
 	return index;
+}
+
+inline static std::string U8ToStr(std::u8string u8str) {
+	std::string str(u8str.cbegin(), u8str.cend());
+	return str;
 }
 
 /*
 		Helper Functions
 */
-std::string FormatString(const std::string& input) {
+static std::string FormatString(const std::string& input) {
 	std::string formattedString = input;
 
 	for (char& c : formattedString) {
@@ -80,7 +118,7 @@ std::string FormatString(const std::string& input) {
 	return formattedString;
 }
 
-void GenerateConfig(std::string fileName) {
+static void GenerateConfig(std::string fileName) {
 	json data;
 
 	for (const Setting& setting : config.settings) {
@@ -115,7 +153,7 @@ void from_json(const json& j, ModConfig& c) {
 		j.at("debugEnabled").at("value").get_to(c.debugEnabled.boolValue);
 	} catch (const json::out_of_range& e) {
 		PrintError(__FILE__, __LINE__, "%s", e.what());
-		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
+		std::string fileName = FormatString(std::string("Infi-Core")) + "-config.json";
 		GenerateConfig(fileName);
 	}
 }
@@ -145,7 +183,7 @@ inline static RValue variable_instance_get(CInstance* instance_id, const char* n
 	RValue id, result;
 	AurieStatus status = g_ModuleInterface->GetBuiltin("id", instance_id, NULL_INDEX, id);
 	if (AurieSuccess(status)) {
-		result = CallBuiltin("variable_instance_get", { id, RValue(name, g_ModuleInterface) });
+		result = CallBuiltin("variable_instance_get", { id, name });
 	}
 	return result;
 }
@@ -154,32 +192,48 @@ inline static void variable_instance_set(CInstance* instance_id, const char* nam
 	RValue id;
 	AurieStatus status = g_ModuleInterface->GetBuiltin("id", instance_id, NULL_INDEX, id);
 	if (AurieSuccess(status)) {
-		CallBuiltin("variable_instance_set", { id, RValue(name, g_ModuleInterface), val });
+		CallBuiltin("variable_instance_set", { id, name, val });
+	}
+}
+
+inline static void variable_instance_set(CInstance* instance_id, const char* name, int val) {
+	RValue id;
+	AurieStatus status = g_ModuleInterface->GetBuiltin("id", instance_id, NULL_INDEX, id);
+	if (AurieSuccess(status)) {
+		CallBuiltin("variable_instance_set", { id, name, (double)val });
+	}
+}
+
+inline static void variable_instance_set(CInstance* instance_id, const char* name, const char* val) {
+	RValue id;
+	AurieStatus status = g_ModuleInterface->GetBuiltin("id", instance_id, NULL_INDEX, id);
+	if (AurieSuccess(status)) {
+		CallBuiltin("variable_instance_set", { id, name, val });
 	}
 }
 
 inline static RValue variable_global_get(const char* name) {
-	return CallBuiltin("variable_global_get", { RValue(name, g_ModuleInterface) });
+	return CallBuiltin("variable_global_get", { name });
 }
 
 inline static void variable_global_set(const char* name, const char* value) {
-	CallBuiltin("variable_global_set", { RValue(name, g_ModuleInterface), RValue(value, g_ModuleInterface) });
+	CallBuiltin("variable_global_set", { name, value });
 }
 
 inline static void variable_global_set(const char* name, double value) {
-	CallBuiltin("variable_global_set", { RValue(name, g_ModuleInterface), value });
+	CallBuiltin("variable_global_set", { name, value });
 }
 
 inline static RValue struct_get(RValue variable, const char* name) {
-	return CallBuiltin("struct_get", { variable, RValue(name, g_ModuleInterface) });
+	return CallBuiltin("struct_get", { variable, name });
 }
 
 inline static std::string_view array_get(RValue variable, double index) {
-	return CallBuiltin("array_get", { variable, index }).AsString(g_ModuleInterface);
+	return CallBuiltin("array_get", { variable, index }).AsString();
 }
 
-inline static void array_set(RValue variable, double index, std::string value) {
-	CallBuiltin("array_set", { variable, index, RValue(value, g_ModuleInterface) });
+inline static void array_set(RValue variable, double index, const char* value) {
+	CallBuiltin("array_set", { variable, index, value });
 }
 
 inline static void draw_sprite(const char* sprite, double subimg, double x, double y) {
@@ -207,7 +261,7 @@ inline static void draw_set_color(double col) {
 }
 
 inline static void draw_text(double x, double y, const char* string) {
-	CallBuiltin("draw_text", { x, y, RValue(string, g_ModuleInterface) });
+	CallBuiltin("draw_text", { x, y, string });
 }
 // "snd_menu_confirm", 30, false
 inline static void audio_play_sound(const char* name, double priority, bool loop) {
@@ -216,25 +270,24 @@ inline static void audio_play_sound(const char* name, double priority, bool loop
 
 PFUNC_YYGMLScript draw_text_outline_script = nullptr;
 std::vector<RValue*> draw_text_outline_args = {
-	new RValue((double)320),
-	new RValue((double)(48 + 13)),
+	new RValue(320),
+	new RValue(48 + 13),
 	new RValue("MOD SETTINGS", g_ModuleInterface),
-	new RValue((double)1),
-	new RValue((double)0),
-	new RValue((double)32),
-	new RValue((double)4),
-	new RValue((double)300),
-	new RValue((double)0),
-	new RValue((double)1)
+	new RValue(1),
+	new RValue(0),
+	new RValue(32),
+	new RValue(4),
+	new RValue(300),
+	new RValue(0),
+	new RValue(1)
 };
 
 PFUNC_YYGMLScript command_promps_script = nullptr;
 std::vector<RValue*> command_promps_args = {
-	new RValue((double)1),
-	new RValue((double)1),
-	new RValue((double)1)
+	new RValue(1),
+	new RValue(1),
+	new RValue(1)
 };
-
 
 static void HookScriptFunction(AurieModule* Module, const char* HookIdentifier, const char* ScriptFunctionName, void* DetourFunction, void** OrigScript) {
 	int script_function_index = 0;
@@ -268,6 +321,8 @@ static int no_config_error_timer = 0;
 static std::vector<RemoteMod> mods;
 static int current_mod = 0;
 static int current_mod_setting = 0;
+static std::string curr_lang = "eng";
+static std::string original_version = "NO_VER";
 
 static void LoadUnloadMods() {
 	AurieStatus status{};
@@ -277,44 +332,44 @@ static void LoadUnloadMods() {
 		std::string mod_name_no_disable = mod.name;
 		if (std::string_view(mod.name).ends_with(".disabled"))
 			mod_name_no_disable = mod.name.substr(0, mod.name.length() - std::string(".disabled").length());
-		
-		std::string enabled_path = "mods\\Aurie\\" + mod_name_no_disable;
-		std::string disabled_path = "mods\\Aurie\\" + mod_name_no_disable + ".disabled";
+
+		fs::path enabled_path = fs::current_path() / "mods" / "Aurie" / mod_name_no_disable;
+		fs::path disabled_path = fs::current_path() / "mods" / "Aurie" / std::string(mod_name_no_disable + ".disabled");
 
 		if (mod.enabled == true) {	// load mod
 			std::error_code ec;
-			std::filesystem::rename(disabled_path, enabled_path, ec);
+			fs::rename(disabled_path, enabled_path, ec);
 			if (ec.value() == 0) {
-				Print(CM_LIGHTPURPLE, "[*] Moved '%s' to '%s'!", disabled_path.c_str(), enabled_path.c_str());
+				Print(CM_LIGHTPURPLE, "[*] Moved '%s' to '%s'!", disabled_path.string().c_str(), enabled_path.string().c_str());
 				AurieModule* temp_module = nullptr;
 				status = MdMapImage(enabled_path, temp_module);
 				if (AurieSuccess(status)) {
-					Print(CM_GREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name, temp_module);
+					Print(CM_GREEN, "[+] Loaded '%s' - mapped to 0x%p.", mod.name.c_str(), temp_module);
 				} else {
-					PrintError(__FILE__, __LINE__, "Failed to load '%s'!", mod.name);
+					PrintError(__FILE__, __LINE__, "Failed to load '%s'!", mod.name.c_str());
 				}
 			} else {
-				PrintError(__FILE__, __LINE__, "Failed to move '%s' to '%s'", disabled_path.c_str(), enabled_path.c_str());
-			} 
+				PrintError(__FILE__, __LINE__, "Failed to move '%s' to '%s'", disabled_path.string().c_str(), enabled_path.string().c_str());
+			}
 		} else {					// unload mod
 			AurieModule* module_to_remove = nullptr;
 			status = Internal::MdpLookupModuleByPath(enabled_path, module_to_remove);
 			if (AurieSuccess(status)) {
 				status = MdUnmapImage(module_to_remove);
 				if (AurieSuccess(status)) {
-					Print(CM_RED, "[-] Unloaded '%s'", mod.name);
+					Print(CM_RED, "[-] Unloaded '%s'", mod.name.c_str());
 					std::error_code ec;
-					std::filesystem::rename(enabled_path, disabled_path, ec);
+					fs::rename(enabled_path, disabled_path, ec);
 					if (ec.value() == 0) {
-						Print(CM_LIGHTPURPLE, "[*] Moved '%s' to '%s'!", enabled_path.c_str(), disabled_path.c_str());
+						Print(CM_LIGHTPURPLE, "[*] Moved '%s' to '%s'!", enabled_path.string().c_str(), disabled_path.string().c_str());
 					} else {
-						PrintError(__FILE__, __LINE__, "Failed to move '%s' to '%s'", enabled_path.c_str(), disabled_path.c_str());
+						PrintError(__FILE__, __LINE__, "Failed to move '%s' to '%s'", enabled_path.string().c_str(), disabled_path.string().c_str());
 					}
 				} else {
-					PrintError(__FILE__, __LINE__, "Failed to unload '%s' at 0x%p!", mod.name, module_to_remove);
+					PrintError(__FILE__, __LINE__, "Failed to unload '%s' at 0x%p!", mod.name.c_str(), module_to_remove);
 				}
 			} else {
-				PrintError(__FILE__, __LINE__, "Failed to get path for '%s' at '%s'!", mod.name, enabled_path);
+				PrintError(__FILE__, __LINE__, "Failed to get module '%s' at '%s'!", mod.name.c_str(), enabled_path.string().c_str());
 			}
 		}
 
@@ -334,17 +389,34 @@ static void GetMods() {
 
 	// Sort Mods Alphabetically
 	std::sort(mods.begin(), mods.end(), [](const RemoteMod& a, const RemoteMod& b) {
-		return a.name < b.name;
-	});
+		auto case_insensitive_compare = [](char a, char b) {
+			return std::tolower(a) < std::tolower(b);
+		};
+
+		// Move "YYToolkit" to the front
+		if (a.name == "YYToolkit.dll") return true;
+		if (b.name == "YYToolkit.dll") return false;
+
+		// Move "infi-core" to the front after "YYToolkit"
+		if (a.name == "infi-core.dll") return true;
+		if (b.name == "infi-core.dll") return false;
+
+		// For other elements, use lexicographical comparison
+		return std::lexicographical_compare(
+			a.name.begin(), a.name.end(),
+			b.name.begin(), b.name.end(),
+			case_insensitive_compare
+		);
+    });
 }
 
 static void GetModConfigs() {
 	// Get Configs for Mods
 	for (RemoteMod& mod : mods) {
 		std::string config_name = mod.name.substr(0, mod.name.size() - 4) + "-config.json";
-		std::filesystem::path config_path = "modconfigs/" + config_name;
+		fs::path config_path = "modconfigs/" + config_name;
 
-		if (std::filesystem::exists(config_path)) {
+		if (fs::exists(config_path)) {
 			RemoteConfig config;
 			config.name = config_name;
 
@@ -397,12 +469,10 @@ static void SetConfigSettings() {
 	}
 }
 
-typedef RValue* (*ScriptFunc)(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args);
-
 // gml_Script_Confirmed_gml_Object_obj_TitleScreen_Create_0
-ScriptFunc origConfirmedTitleScreenScript = nullptr;
-static RValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args) {
-	RValue* res = nullptr;
+PFUNC_YYGMLScript OrigConfirmedTitleScreenScript = nullptr;
+static RValue& ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue &ReturnValue, int numArgs, RValue** Args) {
+	RValue res;
 	int can_control = variable_instance_get(Self, "canControl").AsReal();
 	int current_option = variable_instance_get(Self, "currentOption").AsReal();
 	if (current_option == 3) { // 3 = mod configs button index
@@ -413,9 +483,13 @@ static RValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other,
 			draw_config_menu = true;
 			audio_play_sound("snd_menu_confirm", 30, false);
 		} else if (config_hovered == false) {
-			mods[current_mod].enabled = !mods[current_mod].enabled;
-			mods[current_mod].was_toggled = !mods[current_mod].was_toggled;
-			audio_play_sound("snd_menu_confirm", 30, false);
+			if (mods[current_mod].name == "YYToolkit.dll" || mods[current_mod].name == "infi-core.dll") {
+				audio_play_sound("snd_alert", 30, false);
+			} else {
+				mods[current_mod].enabled = !mods[current_mod].enabled;
+				mods[current_mod].was_toggled = !mods[current_mod].was_toggled;
+				audio_play_sound("snd_menu_confirm", 30, false);
+			}
 		} else if (config_selected == false) {
 			if (mods[current_mod].has_config == false) {
 				no_config_error = true;
@@ -432,15 +506,15 @@ static RValue* ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other,
 			}
 		}
 	} else {
-		res = origConfirmedTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = OrigConfirmedTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
 
 // gml_Script_ReturnMenu_gml_Object_obj_TitleScreen_Create_0
-ScriptFunc origReturnMenuTitleScreenScript = nullptr;
-static RValue* ReturnMenuTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args) {
-	RValue* res = nullptr;
+PFUNC_YYGMLScript OrigReturnMenuTitleScreenScript = nullptr;
+static RValue& ReturnMenuTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue &ReturnValue, int numArgs, RValue** Args) {
+	RValue res;
 	int can_control = variable_instance_get(Self, "canControl").AsReal();
 	int current_option = variable_instance_get(Self, "currentOption").AsReal();
 	if (current_option == 3) { // 3 = mod configs button index
@@ -458,15 +532,18 @@ static RValue* ReturnMenuTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 			LoadUnloadMods();
 		}
 	} else {
-		res = origReturnMenuTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = OrigReturnMenuTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
+	curr_lang = variable_global_get("CurrentLanguage").AsString();
+	if (original_version == "NO_VER") original_version = variable_global_get("version").AsString();
+	variable_instance_set(Self, "version", (original_version + U8ToStr(locales[curr_lang]["version_modded"])).c_str());
 	return res;
 };
 
 // gml_Script_SelectLeft_gml_Object_obj_TitleScreen_Create_0
-ScriptFunc origSelectLeftTitleScreenScript = nullptr;
-static RValue* SelectLeftTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args) {
-	RValue* res = nullptr;
+PFUNC_YYGMLScript OrigSelectLeftTitleScreenScript = nullptr;
+static RValue& SelectLeftTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue &ReturnValue, int numArgs, RValue** Args) {
+	RValue res;
 	int can_control = variable_instance_get(Self, "canControl").AsReal();
 	int current_option = variable_instance_get(Self, "currentOption").AsReal();
 	if (current_option == 3 && draw_config_menu == true) { // 3 = mod configs button index
@@ -477,15 +554,15 @@ static RValue* SelectLeftTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 			}
 		}
 	} else {
-		res = origSelectLeftTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = OrigSelectLeftTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
 
 // gml_Script_SelectRight_gml_Object_obj_TitleScreen_Create_0
-ScriptFunc origSelectRightTitleScreenScript = nullptr;
-static RValue* SelectRightTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args) {
-	RValue* res = nullptr;
+PFUNC_YYGMLScript OrigSelectRightTitleScreenScript = nullptr;
+static RValue& SelectRightTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue &ReturnValue, int numArgs, RValue** Args) {
+	RValue res;
 	int can_control = variable_instance_get(Self, "canControl").AsReal();
 	int current_option = variable_instance_get(Self, "currentOption").AsReal();
 	if (current_option == 3 && draw_config_menu == true) { // 3 = mod configs button index
@@ -496,15 +573,15 @@ static RValue* SelectRightTitleScreenFuncDetour(CInstance* Self, CInstance* Othe
 			}
 		}
 	} else {
-		res = origSelectRightTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = OrigSelectRightTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
 
 // gml_Script_SelectUp_gml_Object_obj_TitleScreen_Create_0
-ScriptFunc origSelectUpTitleScreenScript = nullptr;
-static RValue* SelectUpTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args) {
-	RValue* res = nullptr;
+PFUNC_YYGMLScript OrigSelectUpTitleScreenScript = nullptr;
+static RValue& SelectUpTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue &ReturnValue, int numArgs, RValue** Args) {
+	RValue res;
 	int can_control = variable_instance_get(Self, "canControl").AsReal();
 	int current_option = variable_instance_get(Self, "currentOption").AsReal();
 	if (current_option == 3 && draw_config_menu == true) { // 3 = mod configs button index
@@ -516,15 +593,15 @@ static RValue* SelectUpTitleScreenFuncDetour(CInstance* Self, CInstance* Other, 
 			audio_play_sound("snd_menu_select", 30, false);
 		}
 	} else {
-		res = origSelectUpTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = OrigSelectUpTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
 
 // gml_Script_SelectDown_gml_Object_obj_TitleScreen_Create_0
-ScriptFunc origSelectDownTitleScreenScript = nullptr;
-static RValue* SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue* ReturnValue, int numArgs, RValue** Args) {
-	RValue* res = nullptr;
+PFUNC_YYGMLScript OrigSelectDownTitleScreenScript = nullptr;
+static RValue& SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other, RValue &ReturnValue, int numArgs, RValue** Args) {
+	RValue res;
 	int can_control = variable_instance_get(Self, "canControl").AsReal();
 	int current_option = variable_instance_get(Self, "currentOption").AsReal();
 	if (current_option == 3 && draw_config_menu == true) { // 3 = mod configs button index
@@ -536,7 +613,7 @@ static RValue* SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 			audio_play_sound("snd_menu_select", 30, false);
 		}
 	} else {
-		res = origSelectDownTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
+		res = OrigSelectDownTitleScreenScript(Self, Other, ReturnValue, numArgs, Args);
 	}
 	return res;
 };
@@ -551,7 +628,6 @@ std::string GetFileName(const char* File) {
 }
 
 static uint32_t FrameNumber = 0;
-static bool version_text_changed = false;
 
 /*
 		Frame Callback Event
@@ -599,15 +675,10 @@ static AurieStatus CodeCallback(
 	if (Name == "gml_Object_obj_TitleScreen_Create_0") {
 		GetMods();
 		GetModConfigs();
-		if (version_text_changed == false) {
-			std::string_view version = variable_global_get("version").AsString(g_ModuleInterface);
-			if (version.find("Modded") == std::string::npos) {
-				std::string modded_ver_str = std::string(version) + " (Modded)";
-				variable_global_set("version", modded_ver_str.c_str());
-			}
-			version_text_changed = true;
-		}
-
+		curr_lang = variable_global_get("CurrentLanguage").AsString();
+		if (original_version == "NO_VER") original_version = variable_global_get("version").AsString();
+		variable_global_set("version", (original_version + U8ToStr(locales[curr_lang]["version_modded"])).c_str());
+		
 		if (!CodeContext.CalledOriginal()) CodeContext.Call();
 	}
 	/*
@@ -617,28 +688,26 @@ static AurieStatus CodeCallback(
 		if (!CodeContext.CalledOriginal()) CodeContext.Call();
 
 		RValue text_container = variable_global_get("TextContainer");
-		RValue title_buttons = struct_get(text_container, "titleButtons");
-		RValue eng = struct_get(title_buttons, "eng");
-
-		std::string_view play_text = array_get(eng, 0);
-		if (play_text.find("Modded") == std::string::npos) array_set(eng, 0, "Play Modded!");
-
-		std::string_view lb_text = array_get(eng, 3);
-		if (lb_text.find("Mod Settings") == std::string::npos) array_set(eng, 3, "Mod Settings");
+		text_container["titleButtons"]["eng"][0] = locales["eng"]["play_modded"];
+		text_container["titleButtons"]["jp"][0] = locales["jp"]["play_modded"];
+		text_container["titleButtons"]["Id"][0] = locales["Id"]["play_modded"];
+		text_container["titleButtons"]["eng"][3] = locales["eng"]["mod_settings"];
+		text_container["titleButtons"]["jp"][3] = locales["jp"]["mod_settings"];
+		text_container["titleButtons"]["Id"][3] = locales["Id"]["mod_settings"];
 	}
 	/*
 			Title Screen Draw Event
 	*/
 	else if (Name == "gml_Object_obj_TitleScreen_Draw_0") {
 		if (!CodeContext.CalledOriginal()) CodeContext.Call();
-				
+		
 		if (draw_config_menu == true) {
 
 			// Draw Mod Config Menu Background
 			draw_sprite("hud_optionsmenu", 0, 320, 48);
 
 			// Draw Controls Text
-			command_promps_script(Self, Other, &result, 3, command_promps_args.data());
+			command_promps_script(Self, Other, result, 3, command_promps_args.data());
 
 			if (config_selected == false) {
 				draw_set_font("jpFont_Big");
@@ -647,14 +716,14 @@ static AurieStatus CodeCallback(
 
 				// Draw Mod Settings Menu Title
 
-				draw_text_outline_args[2] = new RValue("MOD SETTINGS", g_ModuleInterface);
-				draw_text_outline_args[1] = new RValue((double)(48 + 13));
-				draw_text_outline_args[8] = new RValue((double)0);
-				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
+				draw_text_outline_args[2] = new RValue(locales[curr_lang]["mod_settings_upper"]);
+				draw_text_outline_args[1] = new RValue(48 + 13);
+				draw_text_outline_args[8] = new RValue(0);
+				draw_text_outline_script(Self, Other, result, 10, draw_text_outline_args.data());
 
-				draw_text_outline_args[1] = new RValue((double)(48 + 10));
-				draw_text_outline_args[8] = new RValue((double)16777215);
-				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
+				draw_text_outline_args[1] = new RValue(48 + 10);
+				draw_text_outline_args[8] = new RValue(16777215);
+				draw_text_outline_script(Self, Other, result, 10, draw_text_outline_args.data());
 
 				draw_set_font("jpFont");
 
@@ -678,11 +747,12 @@ static AurieStatus CodeCallback(
 					draw_text(320 - 78, y + 8, formatted_name.c_str());
 
 					// Draw Mod Checkbox
-
-					if (config_hovered == false || current_mod != i || (config_hovered == true && current_mod == i)) {
-						draw_sprite("hud_toggleButton", mods[i].enabled + (!config_hovered * 2 * (current_mod == i)), 320 + 69, 48 + 56 + (i * 34));
-					} else {
-						draw_sprite_ext("hud_toggleButton", mods[i].enabled, 320 + 69, 48 + 56 + (i * 34), 1, 1, 0, 0, 1);
+					if (mods[i].name != "YYToolkit.dll" && mods[i].name != "infi-core.dll") {
+						if (config_hovered == false || current_mod != i || (config_hovered == true && current_mod == i)) {
+							draw_sprite("hud_toggleButton", mods[i].enabled + (!config_hovered * 2 * (current_mod == i)), 320 + 69, 48 + 56 + (i * 34));
+						} else {
+							draw_sprite_ext("hud_toggleButton", mods[i].enabled, 320 + 69, 48 + 56 + (i * 34), 1, 1, 0, 0, 1);
+						}
 					}
 
 					// Draw Config Button
@@ -709,9 +779,9 @@ static AurieStatus CodeCallback(
 						std::string draw_config_name_str;
 						if (mods[current_mod].has_config == false) {
 							if (no_config_error == true) {
-								draw_config_name_str = (no_config_error_timer % 10 < 5 ? "" : "NO CONFIG");
+								draw_config_name_str = (no_config_error_timer % 10 < 5 ? "" : U8ToStr(locales[curr_lang]["no_config"]));
 							} else {
-								draw_config_name_str = "NO CONFIG";
+								draw_config_name_str = U8ToStr(locales[curr_lang]["no_config"]);
 							}
 							draw_set_color(255);
 						} else {
@@ -720,7 +790,7 @@ static AurieStatus CodeCallback(
 							} else {
 								draw_set_color(0);
 							}
-							draw_config_name_str = "CONFIG";
+							draw_config_name_str = U8ToStr(locales[curr_lang]["config"]);
 						}
 
 						draw_text(320 + 161, y + 16, draw_config_name_str.c_str());
@@ -737,14 +807,14 @@ static AurieStatus CodeCallback(
 
 				// Draw Config Name
 
-				draw_text_outline_args[2] = new RValue(mods[current_mod].config.name.c_str(), g_ModuleInterface);
-				draw_text_outline_args[1] = new RValue((double)(48 + 19));
-				draw_text_outline_args[8] = new RValue((double)0);
-				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
+				draw_text_outline_args[2] = new RValue(mods[current_mod].config.name.c_str());
+				draw_text_outline_args[1] = new RValue(48 + 19);
+				draw_text_outline_args[8] = new RValue(0);
+				draw_text_outline_script(Self, Other, result, 10, draw_text_outline_args.data());
 
-				draw_text_outline_args[1] = new RValue((double)(48 + 16));
-				draw_text_outline_args[8] = new RValue((double)16777215);
-				draw_text_outline_script(Self, Other, &result, 10, draw_text_outline_args.data());
+				draw_text_outline_args[1] = new RValue(48 + 16);
+				draw_text_outline_args[8] = new RValue(16777215);
+				draw_text_outline_script(Self, Other, result, 10, draw_text_outline_args.data());
 
 				draw_set_halign(0);
 
@@ -884,12 +954,12 @@ EXPORTED AurieStatus ModuleInitialize(
 	/*
 			Function Hooks
 	*/
-	HookScriptFunction(Module, "Confirmed", "gml_Script_Confirmed_gml_Object_obj_TitleScreen_Create_0", (void*)&ConfirmedTitleScreenFuncDetour, (void**)&origConfirmedTitleScreenScript);
-	HookScriptFunction(Module, "ReturnMenu", "gml_Script_ReturnMenu_gml_Object_obj_TitleScreen_Create_0", (void*)&ReturnMenuTitleScreenFuncDetour, (void**)&origReturnMenuTitleScreenScript);
-	HookScriptFunction(Module, "SelectLeft", "gml_Script_SelectLeft_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectLeftTitleScreenFuncDetour, (void**)&origSelectLeftTitleScreenScript);
-	HookScriptFunction(Module, "SelectRight", "gml_Script_SelectRight_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectRightTitleScreenFuncDetour, (void**)&origSelectRightTitleScreenScript);
-	HookScriptFunction(Module, "SelectUp", "gml_Script_SelectUp_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectUpTitleScreenFuncDetour, (void**)&origSelectUpTitleScreenScript);
-	HookScriptFunction(Module, "SelectDown", "gml_Script_SelectDown_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectDownTitleScreenFuncDetour, (void**)&origSelectDownTitleScreenScript);
+	HookScriptFunction(Module, "Confirmed", "gml_Script_Confirmed_gml_Object_obj_TitleScreen_Create_0", (void*)&ConfirmedTitleScreenFuncDetour, (void**)&OrigConfirmedTitleScreenScript);
+	HookScriptFunction(Module, "ReturnMenu", "gml_Script_ReturnMenu_gml_Object_obj_TitleScreen_Create_0", (void*)&ReturnMenuTitleScreenFuncDetour, (void**)&OrigReturnMenuTitleScreenScript);
+	HookScriptFunction(Module, "SelectLeft", "gml_Script_SelectLeft_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectLeftTitleScreenFuncDetour, (void**)&OrigSelectLeftTitleScreenScript);
+	HookScriptFunction(Module, "SelectRight", "gml_Script_SelectRight_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectRightTitleScreenFuncDetour, (void**)&OrigSelectRightTitleScreenScript);
+	HookScriptFunction(Module, "SelectUp", "gml_Script_SelectUp_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectUpTitleScreenFuncDetour, (void**)&OrigSelectUpTitleScreenScript);
+	HookScriptFunction(Module, "SelectDown", "gml_Script_SelectDown_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectDownTitleScreenFuncDetour, (void**)&OrigSelectDownTitleScreenScript);
 
 	int draw_text_outline_index = 0;
 	status = g_ModuleInterface->GetNamedRoutineIndex("gml_Script_draw_text_outline", &draw_text_outline_index);
