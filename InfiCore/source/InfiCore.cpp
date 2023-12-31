@@ -397,9 +397,9 @@ static void GetMods() {
 		if (a.name == "YYToolkit.dll") return true;
 		if (b.name == "YYToolkit.dll") return false;
 
-		// Move "infi-core" to the front after "YYToolkit"
-		if (a.name == "infi-core.dll") return true;
-		if (b.name == "infi-core.dll") return false;
+		// Move "InfiCore" to the front after "YYToolkit"
+		if (a.name == "InfiCore.dll") return true;
+		if (b.name == "InfiCore.dll") return false;
 
 		// For other elements, use lexicographical comparison
 		return std::lexicographical_compare(
@@ -483,7 +483,7 @@ static RValue& ConfirmedTitleScreenFuncDetour(CInstance* Self, CInstance* Other,
 			draw_config_menu = true;
 			audio_play_sound("snd_menu_confirm", 30, false);
 		} else if (config_hovered == false) {
-			if (mods[current_mod].name == "YYToolkit.dll" || mods[current_mod].name == "infi-core.dll") {
+			if (mods[current_mod].name == "YYToolkit.dll" || mods[current_mod].name == "InfiCore.dll") {
 				audio_play_sound("snd_alert", 30, false);
 			} else {
 				mods[current_mod].enabled = !mods[current_mod].enabled;
@@ -747,7 +747,7 @@ static AurieStatus CodeCallback(
 					draw_text(320 - 78, y + 8, formatted_name.c_str());
 
 					// Draw Mod Checkbox
-					if (mods[i].name != "YYToolkit.dll" && mods[i].name != "infi-core.dll") {
+					if (mods[i].name != "YYToolkit.dll" && mods[i].name != "InfiCore.dll") {
 						if (config_hovered == false || current_mod != i || (config_hovered == true && current_mod == i)) {
 							draw_sprite("hud_toggleButton", mods[i].enabled + (!config_hovered * 2 * (current_mod == i)), 320 + 69, 48 + 56 + (i * 34));
 						} else {
