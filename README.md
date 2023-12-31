@@ -3,7 +3,7 @@ A HoloCure core mod that adds in-game mod enabling/disabling, config editing, an
 
  Note: this is a **CORE MOD** that all of my other mods depend on. **If you install my other mods, you will need this one.**
 
-![Infi Core Example GIF](https://github.com/mashirochan/HoloCure-InfiCore/blob/38b6996b7c42a96458a90aa11c41e18bf554feb9/Infi%20Core%20Example.gif)
+![InfiCore Example GIF](https://github.com/mashirochan/HoloCure-InfiCore/blob/a8fa6856db71e83d26c17b39bef46e2eb5455a5e/InfiCore%20Example%20GIF.gif)
 
 # Installation
 

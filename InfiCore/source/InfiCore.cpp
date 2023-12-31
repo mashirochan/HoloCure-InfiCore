@@ -933,7 +933,7 @@ EXPORTED AurieStatus ModuleInitialize(
 			}
 		}
 
-		std::string fileName = FormatString(std::string("Infi-Core")) + "-config.json";
+		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
 		std::ifstream configFile("modconfigs/" + fileName);
 		json data;
 		if (configFile.is_open() == false) {	// no config file
