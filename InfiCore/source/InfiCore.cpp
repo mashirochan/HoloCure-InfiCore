@@ -1,4 +1,5 @@
 ﻿#include <YYToolkit/Shared.hpp>
+#include <CallbackManager/CallbackManagerInterface.h>
 #include <nlohmann/json.hpp>
 
 #include <vector>
@@ -13,6 +14,7 @@ using namespace YYTK;
 using json = nlohmann::json;
 
 static YYTKInterface* g_ModuleInterface = nullptr;
+static CallbackManagerInterface* g_CmInterface = nullptr;
 
 /*
 		Config Variables
@@ -102,39 +104,39 @@ inline static std::string U8ToStr(std::u8string u8str) {
 /*
 		Helper Functions
 */
-static std::string FormatString(const std::string& input) {
-	std::string formattedString = input;
+std::string FormatString(const std::string& Input) {
+	std::string formatted_string = Input;
 
-	for (char& c : formattedString) {
+	for (char& c : formatted_string) {
 		c = std::tolower(c);
 	}
 
-	for (char& c : formattedString) {
+	for (char& c : formatted_string) {
 		if (c == ' ') {
 			c = '-';
 		}
 	}
 
-	return formattedString;
+	return formatted_string;
 }
 
-static void GenerateConfig(std::string fileName) {
+static void GenerateConfig(std::string FileName) {
 	json data;
 
 	for (const Setting& setting : config.settings) {
-		json settingData;
-		settingData["icon"] = setting.icon;
-		if (setting.type == SETTING_BOOL) settingData["value"] = setting.boolValue;
-		data[setting.name.c_str()] = settingData;
+		json setting_data;
+		setting_data["icon"] = setting.icon;
+		if (setting.type == SETTING_BOOL) setting_data["value"] = setting.boolValue;
+		data[setting.name.c_str()] = setting_data;
 	}
 
-	std::ofstream configFile("modconfigs/" + fileName);
-	if (configFile.is_open()) {
-		Print(CM_WHITE, "[InfiCore] - Config file \"%s\" created!", fileName.c_str());
-		configFile << std::setw(4) << data << std::endl;
-		configFile.close();
+	std::ofstream config_file("modconfigs/" + FileName);
+	if (config_file.is_open()) {
+		Print(CM_WHITE, "[InfiCore] - Config file \"%s\" created!", FileName.c_str());
+		config_file << std::setw(4) << data << std::endl;
+		config_file.close();
 	} else {
-		PrintError(__FILE__, __LINE__, "[InfiCore] - Error opening config file \"%s\"", fileName.c_str());
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Error opening config file \"%s\"", FileName.c_str());
 	}
 }
 
@@ -153,7 +155,7 @@ void from_json(const json& j, ModConfig& c) {
 		j.at("debugEnabled").at("value").get_to(c.debugEnabled.boolValue);
 	} catch (const json::out_of_range& e) {
 		PrintError(__FILE__, __LINE__, "%s", e.what());
-		std::string fileName = FormatString(std::string("Infi-Core")) + "-config.json";
+		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
 		GenerateConfig(fileName);
 	}
 }
@@ -263,11 +265,12 @@ inline static void draw_set_color(double col) {
 inline static void draw_text(double x, double y, const char* string) {
 	CallBuiltin("draw_text", { x, y, string });
 }
-// "snd_menu_confirm", 30, false
+
 inline static void audio_play_sound(const char* name, double priority, bool loop) {
 	CallBuiltin("audio_play_sound", { GetAssetIndexFromName(name), priority, loop });
 }
 
+CScript* draw_text_outline_cscript = nullptr;
 PFUNC_YYGMLScript draw_text_outline_script = nullptr;
 std::vector<RValue*> draw_text_outline_args = {
 	new RValue(320),
@@ -282,6 +285,7 @@ std::vector<RValue*> draw_text_outline_args = {
 	new RValue(1)
 };
 
+CScript* command_promps_cscript = nullptr;
 PFUNC_YYGMLScript command_promps_script = nullptr;
 std::vector<RValue*> command_promps_args = {
 	new RValue(1),
@@ -618,13 +622,13 @@ static RValue& SelectDownTitleScreenFuncDetour(CInstance* Self, CInstance* Other
 	return res;
 };
 
-std::string GetFileName(const char* File) {
-	std::string sFileName(File);
-	size_t LastSlashPos = sFileName.find_last_of("\\");
-	if (LastSlashPos != std::string::npos && LastSlashPos != sFileName.length()) {
-		sFileName = sFileName.substr(LastSlashPos + 1);
+static std::string GetFileName(const char* File) {
+	std::string s_file_name(File);
+	size_t last_slash_pos = s_file_name.find_last_of("\\");
+	if (last_slash_pos != std::string::npos && last_slash_pos != s_file_name.length()) {
+		s_file_name = s_file_name.substr(last_slash_pos + 1);
 	}
-	return sFileName;
+	return s_file_name;
 }
 
 static uint32_t FrameNumber = 0;
@@ -652,8 +656,7 @@ static AurieStatus FrameCallback(
 */
 static AurieStatus CodeCallback(
 	IN FWCodeEvent& CodeContext
-)
-{
+) {
 	CInstance* Self = std::get<0>(CodeContext.Arguments());
 	CInstance* Other = std::get<1>(CodeContext.Arguments());
 	CCode* Code = std::get<2>(CodeContext.Arguments());
@@ -896,6 +899,18 @@ EXPORTED AurieStatus ModuleInitialize(
 
 	Print(CM_LIGHTGREEN, "[InfiCore] - Hello from PluginEntry!");
 
+	status = ObGetInterface(
+		"callbackManager",
+		(AurieInterfaceBase*&)(g_CmInterface)
+	);
+
+	if (!AurieSuccess(status)) {
+		PrintError(__FILE__, __LINE__, "[InfiCore] - Failed to get Callback Manager Interface! Make sure that CallbackManagerMod is located in the mods/Aurie directory.");
+		return AURIE_MODULE_DEPENDENCY_NOT_RESOLVED;
+	}
+
+	Print(CM_LIGHTGREEN, "[InfiCore] - Callback Manager Interface loaded!");
+
 	// Create callback for Frame Events
 	status = g_ModuleInterface->CreateCallback(
 		Module,
@@ -922,10 +937,10 @@ EXPORTED AurieStatus ModuleInitialize(
 
 	if (HAS_CONFIG == true) {
 		// Load mod config file or create one if there isn't one already.
-		const wchar_t* dirName = L"modconfigs";
+		const wchar_t* dir_name = L"modconfigs";
 
-		if (GetFileAttributes(dirName) == INVALID_FILE_ATTRIBUTES) {
-			if (CreateDirectory(dirName, NULL)) {
+		if (GetFileAttributes(dir_name) == INVALID_FILE_ATTRIBUTES) {
+			if (CreateDirectory(dir_name, NULL)) {
 				Print(CM_LIGHTGREEN, "[InfiCore] - Directory \"modconfigs\" created!");
 			} else {
 				PrintError(__FILE__, __LINE__, "Failed to create the modconfigs directory. Error code: %lu", GetLastError());
@@ -933,14 +948,14 @@ EXPORTED AurieStatus ModuleInitialize(
 			}
 		}
 
-		std::string fileName = FormatString(std::string("InfiCore")) + "-config.json";
-		std::ifstream configFile("modconfigs/" + fileName);
+		std::string file_name = FormatString(std::string("InfiCore")) + "-config.json";
+		std::ifstream config_file("modconfigs/" + file_name);
 		json data;
-		if (configFile.is_open() == false) {	// no config file
-			GenerateConfig(fileName);
+		if (config_file.is_open() == false) {	// no config file
+			GenerateConfig(file_name);
 		} else {
 			try {
-				data = json::parse(configFile);
+				data = json::parse(config_file);
 			} catch (json::parse_error& e) {
 				PrintError(__FILE__, __LINE__, "Message: %s\nException ID: %d\nByte Position of Error: %u", e.what(), e.id, (unsigned)e.byte);
 				return AURIE_FILE_PART_NOT_FOUND;
@@ -948,7 +963,7 @@ EXPORTED AurieStatus ModuleInitialize(
 
 			config = data.template get<ModConfig>();
 		}
-		Print(CM_LIGHTGREEN, "[InfiCore] - %s loaded successfully!", fileName.c_str());
+		Print(CM_LIGHTGREEN, "[InfiCore] - %s loaded successfully!", file_name.c_str());
 	}
 
 	/*
@@ -961,20 +976,10 @@ EXPORTED AurieStatus ModuleInitialize(
 	HookScriptFunction(Module, "SelectUp", "gml_Script_SelectUp_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectUpTitleScreenFuncDetour, (void**)&OrigSelectUpTitleScreenScript);
 	HookScriptFunction(Module, "SelectDown", "gml_Script_SelectDown_gml_Object_obj_TitleScreen_Create_0", (void*)&SelectDownTitleScreenFuncDetour, (void**)&OrigSelectDownTitleScreenScript);
 
-	int draw_text_outline_index = 0;
-	status = g_ModuleInterface->GetNamedRoutineIndex("gml_Script_draw_text_outline", &draw_text_outline_index);
-	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
-	CScript* draw_text_outline_cscript = nullptr;
-	status = g_ModuleInterface->GetScriptData(draw_text_outline_index - 100000, draw_text_outline_cscript);
-	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
+	g_ModuleInterface->GetNamedRoutinePointer("gml_Script_draw_text_outline", reinterpret_cast<PVOID*>(&draw_text_outline_cscript));
 	draw_text_outline_script = draw_text_outline_cscript->m_Functions->m_ScriptFunction;
 
-	int command_promps_index = 0;
-	status = g_ModuleInterface->GetNamedRoutineIndex("gml_Script_commandPromps", &command_promps_index);
-	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
-	CScript* command_promps_cscript = nullptr;
-	status = g_ModuleInterface->GetScriptData(command_promps_index - 100000, command_promps_cscript);
-	if (!AurieSuccess(status)) return AURIE_OBJECT_NOT_FOUND;
+	g_ModuleInterface->GetNamedRoutinePointer("gml_Script_commandPromps", reinterpret_cast<PVOID*>(&command_promps_cscript));
 	command_promps_script = command_promps_cscript->m_Functions->m_ScriptFunction;
 
 	Print(CM_LIGHTGREEN, "[InfiCore] - Everything initialized successfully!");

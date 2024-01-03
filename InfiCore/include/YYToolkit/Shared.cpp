@@ -9,10 +9,13 @@ static YYTKInterface* GetYYTKInterface() {
 	// Try getting the interface
 	// If we error, we return nullptr.
 	if (!module_interface) {
-		ObGetInterface(
+		AurieStatus last_status = ObGetInterface(
 			"YYTK_Main",
 			reinterpret_cast<AurieInterfaceBase*&>(module_interface)
 		);
+
+		if (!AurieSuccess(last_status))
+			printf("[%s : %d] FATAL: Failed to get YYTK Interface!\n", __FILE__, __LINE__);
 	}
 
 	return module_interface;
@@ -185,8 +188,12 @@ bool RValue::AsBool() const {
 	case VALUE_INT64:
 		return this->m_i64 > 0;
 	default:
-		// Bool argument has incorrect type!
-		assert(false);
+		GetYYTKInterface()->PrintError(
+			__FILE__,
+			__LINE__,
+			"Trying to get boolean value of invalid kind '%u'!",
+			this->m_Kind
+		);
 	}
 
 	return false;
@@ -203,8 +210,12 @@ double RValue::AsReal() const {
 	case VALUE_INT64:
 		return static_cast<double>(this->m_i64);
 	default:
-		// Real argument has incorrect type!
-		assert(false);
+		GetYYTKInterface()->PrintError(
+			__FILE__,
+			__LINE__,
+			"Trying to get real value of invalid kind '%u'!",
+			this->m_Kind
+		);
 	}
 
 	return 0.0;
@@ -247,6 +258,13 @@ RValue& RValue::operator[](
 		Index,
 		result
 	))) {
+		GetYYTKInterface()->PrintError(
+			__FILE__,
+			__LINE__,
+			"Trying to index invalid array index '%lld'!",
+			Index
+		);
+
 		return *this;
 	}
 
@@ -268,6 +286,13 @@ RValue& RValue::operator[](
 
 	// Prevents access violations, null references are undefined behavior in the C++ standard
 	if (!AurieSuccess(last_status) || !instance_member) {
+		GetYYTKInterface()->PrintError(
+			__FILE__,
+			__LINE__,
+			"Trying to access inaccessible instance member '%s'!",
+			Element.data()
+		);
+
 		return *this;
 	}
 
@@ -284,6 +309,43 @@ RValue& RValue::at(
 	IN std::string_view Element
 ) {
 	return this->operator[](Element);
+}
+
+RValue* YYTK::RValue::data() {
+	if (!GetYYTKInterface())
+		return this;
+
+	RValue* data_base_address = this;
+
+	// The "data_base_address" variable will remain a thisptr unless the function succeeds,
+	// so we don't need to check the return value, as we will always return a valid pointer
+	GetYYTKInterface()->GetArrayEntry(
+		*this,
+		0,
+		data_base_address
+	);
+
+	return data_base_address;
+}
+
+size_t YYTK::RValue::length() {
+	// Non-array RValues always only have 1 element
+	if (this->m_Kind != VALUE_ARRAY)
+		return 1;
+
+	YYTKInterface* module_interface = GetYYTKInterface();
+	if (!module_interface)
+		return 0;
+
+	// We don't have to check return value, since if the function failed,
+	// the value in current_size is preserved.
+	size_t current_size = 0;
+	module_interface->GetArraySize(
+		*this,
+		current_size
+	);
+
+	return current_size;
 }
 
 RValue& CInstance::operator[](
