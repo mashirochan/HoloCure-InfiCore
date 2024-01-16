@@ -244,6 +244,10 @@ inline static void draw_sprite_ext(const char* sprite, double subimg, double x, 
 	CallBuiltin("draw_sprite_ext", { GetAssetIndexFromName(sprite), subimg, x, y, xscale, yscale, rot, color, alpha });
 }
 
+inline static void draw_rectangle(double x1, double y1, double x2, double y2, bool outline) {
+	CallBuiltin("draw_rectangle", { x1, y1, x2, y2, outline });
+}
+
 inline static void draw_set_font(const char* font) {
 	CallBuiltin("draw_set_font", { GetAssetIndexFromName(font) });
 }
@@ -465,6 +469,10 @@ static std::string GetFileName(const char* File) {
 }
 
 static uint32_t FrameNumber = 0;
+static const int max_menu_entries = 7;
+static int menu_offset = 0;
+static int menu_pos = 0;
+static int show_option_range = 0;
 
 /*
 		Frame Callback Event
@@ -543,19 +551,19 @@ void TitleScreenDrawAfter(CodeEventArgs& Args) {
 
 			draw_set_halign(0);
 
-			for (int i = 0; i < mods.size(); i++) {
+			for (int i = 0; i < mods.size() && i < max_menu_entries; i++) {
 				int y = 48 + 43 + (i * 34);
 
 				// Draw Mod Background
 
-				draw_sprite("hud_OptionButton", (current_mod == i && !config_hovered), 320, y);
+				draw_sprite("hud_OptionButton", (current_mod == i + menu_offset && !config_hovered), 320, y);
 
-				draw_set_color(mods[i].enabled ? (current_mod == i && !config_hovered ? 0 : 16777215) : 8421504);
+				draw_set_color(mods[i + menu_offset].enabled ? (current_mod == i + menu_offset && !config_hovered ? 0 : 16777215) : 8421504);
 
 				// Draw Mod Name
-				std::string formatted_name = mods[i].name;
+				std::string formatted_name = mods[i + menu_offset].name;
 				size_t pos = formatted_name.find(".disabled");
-				if (mods[i].enabled && pos != std::string::npos) {
+				if (mods[i + menu_offset].enabled && pos != std::string::npos) {
 					formatted_name.erase(pos, std::string(".disabled").length());
 				}
 				if (formatted_name.length() > 22) {
@@ -565,17 +573,17 @@ void TitleScreenDrawAfter(CodeEventArgs& Args) {
 				draw_text(320 - 78, y + 8, formatted_name.c_str());
 
 				// Draw Mod Checkbox
-				if (mods[i].name != "YYToolkit.dll" && mods[i].name != "InfiCore.dll" && mods[i].name != "CallbackManagerMod.dll") {
-					if (config_hovered == false || current_mod != i || (config_hovered == true && current_mod == i)) {
-						draw_sprite("hud_toggleButton", mods[i].enabled + (!config_hovered * 2 * (current_mod == i)), 320 + 69, 48 + 56 + (i * 34));
+				if (mods[i].name != "YYToolkit.dll" && mods[i + menu_offset].name != "InfiCore.dll" && mods[i + menu_offset].name != "CallbackManagerMod.dll") {
+					if (config_hovered == false || current_mod != i + menu_offset || (config_hovered == true && current_mod == i + menu_offset)) {
+						draw_sprite("hud_toggleButton", mods[i + menu_offset].enabled + (!config_hovered * 2 * (current_mod == i + menu_offset)), 320 + 69, 48 + 56 + (i * 34));
 					} else {
-						draw_sprite_ext("hud_toggleButton", mods[i].enabled, 320 + 69, 48 + 56 + (i * 34), 1, 1, 0, 0, 1);
+						draw_sprite_ext("hud_toggleButton", mods[i + menu_offset].enabled, 320 + 69, 48 + 56 + (i * 34), 1, 1, 0, 0, 1);
 					}
 				}
 
 				// Draw Config Button
 
-				if (current_mod == i) {
+				if (current_mod == i + menu_offset) {
 
 					// Draw Config Button Background
 
@@ -587,7 +595,7 @@ void TitleScreenDrawAfter(CodeEventArgs& Args) {
 
 					// Draw Left/Right Arrow
 
-					draw_sprite("hud_scrollArrows2", !config_hovered, 320 + 104, y + 14);
+					draw_sprite("hud_scrollArrows2", !config_hovered, 320 + 97, y + 14);
 
 					draw_set_halign(1);
 					draw_set_valign(1);
@@ -616,6 +624,17 @@ void TitleScreenDrawAfter(CodeEventArgs& Args) {
 					draw_set_halign(0);
 					draw_set_valign(0);
 				}
+			}
+
+			if (mods.size() > max_menu_entries) {
+				draw_sprite("hud_scrollArrows", 0, (320 + 109), (48 + 39));
+				draw_sprite("hud_scrollArrows", 1, (320 + 109), (48 + 269));
+
+				int rect_height = (1540 / mods.size());
+				int scroll_dist = (220 / mods.size());
+
+				draw_set_color(16777215);
+				draw_rectangle((320 + 108), ((48 + 44) + (scroll_dist * show_option_range)), (320 + 110), (((48 + 44) + rect_height) + (scroll_dist * show_option_range)), false);
 			}
 
 		} else { // config_selected == true
@@ -799,6 +818,11 @@ RValue& SelectUpTitleScreenBefore(CInstance* Self, CInstance* Other, RValue& Ret
 	if (current_option == 3 && draw_config_menu == true) { // 3 = mod configs button index
 		if (current_mod > 0 && config_selected == false) {
 			current_mod--;
+			if (menu_pos > 0) menu_pos--;
+			else {
+				menu_offset--;
+				if (show_option_range > 0) show_option_range--;
+			}
 			audio_play_sound("snd_menu_select", 30, false);
 		} else if (current_mod_setting > 0 && config_selected == true) {
 			current_mod_setting--;
@@ -816,6 +840,11 @@ RValue& SelectDownTitleScreenBefore(CInstance* Self, CInstance* Other, RValue& R
 	if (current_option == 3 && draw_config_menu == true) { // 3 = mod configs button index
 		if (current_mod < mods.size() - 1 && config_selected == false) {
 			current_mod++;
+			if (menu_pos < max_menu_entries - 1) menu_pos++;
+			else {
+				menu_offset++;
+				if (show_option_range < mods.size() - max_menu_entries) show_option_range++;
+			}
 			audio_play_sound("snd_menu_select", 30, false);
 		} else if (current_mod_setting < mods[current_mod].config.settings.size() - 1 && config_selected == true) {
 			current_mod_setting++;

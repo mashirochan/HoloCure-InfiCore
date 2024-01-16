@@ -43,4 +43,3 @@ AurieStatus InfiCoreInterface::CallConfigCallback(std::string ModFileName) {
 		return AURIE_MODULE_DEPENDENCY_NOT_RESOLVED;
 	}
 }
-
